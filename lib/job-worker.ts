@@ -1,0 +1,297 @@
+import { evaluateCv, type CvEvaluation } from "@/lib/cv-evaluation";
+import { getDbPool } from "@/lib/db";
+import { extractProfileFromCv, type AiExtractedProfile } from "@/lib/extract-keywords";
+import { ensureJobQueueSchema, parseJsonField, type JobSearchQueueRow, type QueuedFileType } from "@/lib/job-queue";
+import { searchJobListings } from "@/lib/job-search";
+import { normalizeCities, normalizeLocationMode, normalizeWorkMode } from "@/lib/search-preferences";
+
+const IDLE_DELAY_MS = 5000;
+const HEARTBEAT_MS = readPositiveNumber(process.env.JOB_HEARTBEAT_MS, 5000);
+const SEARCH_TIMEOUT_MS = readPositiveNumber(process.env.JOB_SEARCH_TIMEOUT_MS, 90000);
+const STALE_PROCESSING_MINUTES = readPositiveNumber(process.env.JOB_STALE_PROCESSING_MINUTES, 2);
+
+let backgroundWorkerRunning = false;
+
+export function ensureJobWorkerRunning() {
+  if (backgroundWorkerRunning) {
+    return;
+  }
+
+  backgroundWorkerRunning = true;
+  void runJobWorkerLoop("api-background").finally(() => {
+    backgroundWorkerRunning = false;
+  });
+}
+
+export async function runJobWorkerLoop(label = "worker") {
+  console.log(`[Worker] Started background job processor (${label})...`);
+  await ensureJobQueueSchema();
+
+  while (true) {
+    const processed = await processNextJob();
+
+    if (!processed) {
+      await sleep(IDLE_DELAY_MS);
+    }
+  }
+}
+
+export async function processNextJob() {
+  await ensureJobQueueSchema();
+
+  const job = await claimNextJob();
+
+  if (!job) {
+    return false;
+  }
+
+  try {
+    await processClaimedJob(job);
+  } catch (error) {
+    console.error(`[Worker] Job ${job.id} failed:`, error);
+    await markJobFailed(job.id, error);
+  }
+
+  return true;
+}
+
+async function claimNextJob(): Promise<JobSearchQueueRow | null> {
+  const pool = getDbPool();
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [rows] = await connection.query<JobSearchQueueRow[]>(
+      `SELECT *
+       FROM job_searches
+       WHERE status = 'pending'
+          OR (status = 'processing' AND (locked_at IS NULL OR locked_at < DATE_SUB(NOW(), INTERVAL ${STALE_PROCESSING_MINUTES} MINUTE)))
+       ORDER BY
+         CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+         created_at DESC
+       LIMIT 1
+       FOR UPDATE`
+    );
+
+    const job = rows[0];
+
+    if (!job) {
+      await connection.commit();
+      return null;
+    }
+
+    await connection.query(
+      `UPDATE job_searches
+       SET status = 'processing',
+           progress = GREATEST(progress, 10),
+           attempts = attempts + 1,
+           locked_at = NOW(),
+           started_at = COALESCE(started_at, NOW()),
+           error_message = NULL,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [job.id]
+    );
+
+    const [updatedRows] = await connection.query<JobSearchQueueRow[]>("SELECT * FROM job_searches WHERE id = ?", [job.id]);
+
+    await connection.commit();
+    return updatedRows[0] ?? null;
+  } catch (error) {
+    await connection.rollback().catch(() => undefined);
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function processClaimedJob(job: JobSearchQueueRow) {
+  const text = job.cv_text?.trim();
+
+  if (!text) {
+    throw new Error("Bu kuyruk işinde CV metni bulunamadı.");
+  }
+
+  const fileType = normalizeFileType(job.file_type);
+  const locationMode = normalizeLocationMode(job.location_mode);
+  const cities = normalizeCities(parseJsonField<unknown[]>(job.cities, []));
+  const workMode = normalizeWorkMode(job.work_mode);
+  const userEmail = typeof job.user_email === "string" ? job.user_email : undefined;
+  const pool = getDbPool();
+
+  console.log(`[Worker] Processing Job ID: ${job.id}`);
+  const cachedProfile = parseJsonField<AiExtractedProfile | null>(job.ai_profile, null);
+  const profileResult = isProfileResult(cachedProfile) ? cachedProfile : await extractProfileFromCv(text);
+
+  await pool.query(
+    `UPDATE job_searches
+     SET progress = GREATEST(progress, 25),
+         ai_profile = ?,
+         target_role = ?,
+         skills = ?,
+         titles = ?,
+         location_mode = ?,
+         cities = ?,
+         work_mode = ?,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [
+      JSON.stringify(profileResult),
+      profileResult.titles[0] ?? null,
+      JSON.stringify(profileResult.skills),
+      JSON.stringify(profileResult.titles),
+      locationMode,
+      JSON.stringify(cities),
+      workMode,
+      job.id
+    ]
+  );
+
+  const cachedEvaluation = parseJsonField<CvEvaluation | null>(job.evaluation, null);
+  const evaluation = isCvEvaluation(cachedEvaluation)
+    ? cachedEvaluation
+    : await evaluateCv({ text, keywordAnalysis: profileResult, fileType });
+
+  await pool.query(
+    `UPDATE job_searches SET progress = GREATEST(progress, 40), evaluation = ?, updated_at = NOW() WHERE id = ?`,
+    [JSON.stringify(evaluation), job.id]
+  );
+
+  console.log(`[Worker] Job ${job.id} - Cache-first search + AI scoring...`);
+  await pool.query("UPDATE job_searches SET progress = GREATEST(progress, 55), updated_at = NOW() WHERE id = ?", [job.id]);
+
+  const searchPayload = await runWithJobHeartbeat(
+    job.id,
+    searchJobListings({
+      skills: profileResult.skills,
+      titles: profileResult.titles,
+      languages: profileResult.languages,
+      experienceAreas: profileResult.experienceAreas,
+      searchKeywords: profileResult.searchKeywords,
+      industries: profileResult.industries,
+      locationMode,
+      cities,
+      workMode,
+      userEmail,
+      fullText: text,
+      aiProfile: profileResult.aiProfile
+    }),
+    SEARCH_TIMEOUT_MS
+  );
+
+  const finalResults = searchPayload.results.filter((result) => result.kind === "job");
+  const summary = {
+    ...searchPayload.summary,
+    resultCount: finalResults.length,
+    realJobCount: finalResults.length,
+    fallbackCount: 0
+  };
+
+  console.log(`[Worker] Job ${job.id} - Completed with ${finalResults.length} results.`);
+  await pool.query(
+    `UPDATE job_searches
+     SET status = 'completed',
+         progress = 100,
+         completed_at = NOW(),
+         result_count = ?,
+         summary = ?,
+         results = ?,
+         cv_text = NULL,
+         locked_at = NULL,
+         error_message = NULL,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [finalResults.length, JSON.stringify(summary), JSON.stringify(finalResults), job.id]
+  );
+}
+
+async function markJobFailed(jobId: number, error: unknown) {
+  const pool = getDbPool();
+  const message = error instanceof Error ? error.message : "Bilinmeyen worker hatası.";
+
+  await pool.query(
+    `UPDATE job_searches
+     SET status = 'failed',
+         progress = 100,
+         error_message = ?,
+         completed_at = NOW(),
+         locked_at = NULL,
+         cv_text = NULL,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [message.slice(0, 2000), jobId]
+  );
+}
+
+function normalizeFileType(value: QueuedFileType | null): QueuedFileType {
+  return value === "docx" ? "docx" : "pdf";
+}
+
+function isProfileResult(value: AiExtractedProfile | null): value is AiExtractedProfile {
+  return Boolean(
+    value &&
+    Array.isArray(value.skills) &&
+    Array.isArray(value.titles) &&
+    Array.isArray(value.searchKeywords) &&
+    value.aiProfile &&
+    typeof value.aiProfile === "object"
+  );
+}
+
+function isCvEvaluation(value: CvEvaluation | null): value is CvEvaluation {
+  return Boolean(value && typeof value.score === "number" && typeof value.summary === "string");
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runWithJobHeartbeat<T>(jobId: number, work: Promise<T>, timeoutMs: number) {
+  const pool = getDbPool();
+  let progress = 55;
+  let finished = false;
+
+  const heartbeat = setInterval(() => {
+    if (finished) {
+      return;
+    }
+
+    progress = Math.min(90, progress + 5);
+    void pool.query(
+      `UPDATE job_searches
+       SET progress = GREATEST(progress, ?), locked_at = NOW(), updated_at = NOW()
+       WHERE id = ? AND status = 'processing'`,
+      [progress, jobId]
+    ).catch((error) => console.error(`[Worker] Job ${jobId} heartbeat failed:`, error));
+  }, HEARTBEAT_MS);
+
+  try {
+    return await withTimeout(work, timeoutMs, "İlan tarama ve AI eşleştirme zaman aşımına uğradı.");
+  } finally {
+    finished = true;
+    clearInterval(heartbeat);
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function readPositiveNumber(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}

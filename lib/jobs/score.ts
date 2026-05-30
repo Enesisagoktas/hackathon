@@ -3,7 +3,12 @@ import type { CandidateProfile, CrawledJobListing, CriteriaItem, CriteriaMatchRe
 import { truncateText } from "@/lib/jobs/normalize";
 import { generateJsonWithGemini } from "@/lib/gemini";
 
-const BATCH_SIZE = 5;
+const BATCH_SIZE = 4;
+// Scoring is bounded and runs in parallel so a slow/unavailable Gemini never
+// blocks the worker. A single attempt keeps the worst case ~SCORING_TIMEOUT_MS.
+const SCORING_TIMEOUT_MS = Number(process.env.AI_SCORING_TIMEOUT_MS ?? 28000);
+const SCORING_MAX_ATTEMPTS = Number(process.env.AI_SCORING_MAX_ATTEMPTS ?? 1);
+const MIN_RESULTS = 6;
 
 type AiScoreItem = {
   index: number;
@@ -27,65 +32,76 @@ export async function scoreListingsWithAi(
   profile: CandidateProfile
 ): Promise<JobSearchResult[]> {
   if (!profile.cvSummary && !profile.fullText) {
-    console.warn("No CV text available for AI scoring");
-    return [];
+    console.warn("No CV text available for AI scoring; returning cheap-scored results.");
+    return buildUnscoredResults(listings.slice(0, 15));
   }
 
   const topCandidates = listings.slice(0, 15);
   const batches = createBatches(topCandidates, BATCH_SIZE);
-  const allResults: JobSearchResult[] = [];
-  let globalIndex = 0;
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-    try {
-      if (i > 0) {
-        console.log(`[AI Scoring] Rate limit: Waiting 30 seconds before next batch...`);
-        await sleep(30000);
-      }
-      
-      const aiScores = await scoreBatchWithAi(batch, profile);
+  // Run every batch concurrently. A failed or slow batch never blocks the
+  // others, and its listings fall back to cheap-scored real results.
+  const settled = await Promise.allSettled(batches.map((batch) => scoreBatchWithAi(batch, profile)));
 
-      for (let j = 0; j < batch.length; j++) {
-        const aiScore = aiScores.find((s) => s.index === j);
-        const listing = batch[j];
+  const scored: JobSearchResult[] = [];
+  const leftover: CrawledJobListing[] = [];
 
-        if (aiScore && aiScore.score >= 20) {
-          allResults.push({
-            id: `${listing.platform}:${listing.externalId ?? listing.url}:${globalIndex}`,
-            kind: "job",
-            platform: listing.platform,
-            category: aiScore.score >= 70 ? "recommended" : listing.category,
-            title: listing.title,
-            company: listing.company,
-            location: listing.location,
-            workMode: listing.workMode ? getWorkModeDisplay(listing.workMode) : undefined,
-            query: listing.sourceQuery,
-            description: truncateText(listing.description || listing.requirements?.join(" ") || "İlan açıklaması parse edildi."),
-            url: listing.url,
-            matchScore: aiScore.score,
-            matchReasons: aiScore.reasons.slice(0, 5),
-            confidence: aiScore.score >= 75 ? "high" : aiScore.score >= 50 ? "medium" : "low",
-            actionLabel: "İlanı Aç",
-            postedAt: listing.postedAt,
-            matchedKeywords: aiScore.matchedKeywords.slice(0, 10),
-            criteriaMatch: sanitizeCriteriaMatch(aiScore.criteriaMatch)
-          });
-        }
-
-        globalIndex++;
-      }
-    } catch (error) {
-      console.error("AI batch scoring failed:", error);
-      globalIndex += batch.length;
+  batches.forEach((batch, batchIndex) => {
+    const outcome = settled[batchIndex];
+    if (outcome.status !== "fulfilled") {
+      console.error("AI batch scoring failed:", outcome.reason);
+      leftover.push(...batch);
+      return;
     }
+
+    const aiScores = outcome.value;
+    batch.forEach((listing, j) => {
+      const aiScore = aiScores.find((s) => s.index === j);
+      if (aiScore && aiScore.score >= 20) {
+        scored.push(buildScoredResult(listing, aiScore, `${batchIndex}-${j}`));
+      } else {
+        leftover.push(listing);
+      }
+    });
+  });
+
+  // Never return an empty screen: if AI produced nothing usable, show the
+  // cheap-ranked real listings. If results are sparse, top them up.
+  if (scored.length === 0) {
+    return buildUnscoredResults(topCandidates);
   }
 
-  return allResults
+  if (scored.length < MIN_RESULTS && leftover.length) {
+    scored.push(...buildUnscoredResults(leftover).slice(0, MIN_RESULTS - scored.length));
+  }
+
+  return scored
     .sort((left, right) => right.matchScore - left.matchScore)
     .slice(0, 30)
     .map((result, index) => ({ ...result, id: `${result.id}:${index + 1}` }));
+}
+
+function buildScoredResult(listing: CrawledJobListing, aiScore: AiScoreItem, idSuffix: string): JobSearchResult {
+  return {
+    id: `${listing.platform}:${listing.externalId ?? listing.url}:${idSuffix}`,
+    kind: "job",
+    platform: listing.platform,
+    category: aiScore.score >= 70 ? "recommended" : listing.category,
+    title: listing.title,
+    company: listing.company,
+    location: listing.location,
+    workMode: listing.workMode ? getWorkModeDisplay(listing.workMode) : undefined,
+    query: listing.sourceQuery,
+    description: truncateText(listing.description || listing.requirements?.join(" ") || "İlan açıklaması parse edildi."),
+    url: listing.url,
+    matchScore: aiScore.score,
+    matchReasons: aiScore.reasons.slice(0, 5),
+    confidence: aiScore.score >= 75 ? "high" : aiScore.score >= 50 ? "medium" : "low",
+    actionLabel: "İlanı Aç",
+    postedAt: listing.postedAt,
+    matchedKeywords: aiScore.matchedKeywords.slice(0, 10),
+    criteriaMatch: sanitizeCriteriaMatch(aiScore.criteriaMatch)
+  };
 }
 
 async function scoreBatchWithAi(
@@ -98,72 +114,58 @@ async function scoreBatchWithAi(
     company: listing.company ?? "Belirtilmemiş",
     location: listing.location ?? "Belirtilmemiş",
     workMode: listing.workMode ?? "Belirtilmemiş",
-    description: listing.description.slice(0, 1500),
+    description: listing.description.slice(0, 800),
     requirements: listing.requirements?.slice(0, 5).join("; ") ?? ""
   }));
 
   const cvContext = buildCvContext(profile);
 
-  const systemInstruction = `Sen uzman bir İK eşleştirme motorusun. Aday profili ile iş ilanlarını semantik olarak karşılaştırıp uyum skoru ve detaylı kriter analizi veriyorsun.
+  // Lean schema: only fields the UI actually uses, with a compact criteria set,
+  // so gemini-2.5-flash can return JSON within the scoring timeout. Heavier
+  // output (8 criteria, missingSkills, long details) caused frequent timeouts.
+  const systemInstruction = `Sen uzman bir İK eşleştirme motorusun. Aday profili ile iş ilanlarını karşılaştırıp uyum skoru ve kısa kriter analizi üret. SADECE geçerli JSON döndür, kısa ve öz ol.
 
-MUTLAKA aşağıdaki JSON şemasına uy:
+JSON şeması:
 {
   "scores": [
     {
       "index": number,
       "score": number,
       "reasons": string[],
-      "missingSkills": string[],
-      "seniorityFit": string,
       "matchedKeywords": string[],
       "criteriaMatch": {
         "overallPercent": number,
-        "criteria": [
-          {
-            "name": string,
-            "status": "met" | "partial" | "unmet",
-            "detail": string
-          }
-        ]
+        "criteria": [ { "name": string, "status": "met" | "partial" | "unmet", "detail": string } ]
       }
     }
   ]
 }
 
-criteriaMatch kuralları:
-- overallPercent: Adayın ilanın gereksinimlerini yüzde kaç karşıladığı (0-100)
-- criteria dizisinde ŞU KATEGORİLERİ MUTLAKA değerlendir:
-  1. "Teknik Beceriler"
-  2. "Deneyim Süresi"
-  3. "Kıdem Seviyesi"
-  4. "Eğitim"
-  5. "Dil Yetkinliği"
-  6. "Sertifikalar"
-  7. "Sektör Deneyimi"
-  8. "Lokasyon"
-- Eğer ilan metninde o kriter hakkında bilgi yoksa, status "met" yap ve detail'de "İlanda bu kriter belirtilmemiş" yaz
-- Her kriter için detail alanında Türkçe, 1-2 cümlelik net bir açıklama yaz
+Kurallar:
+- reasons: en fazla 3 kısa madde (Türkçe).
+- matchedKeywords: ilanla eşleşen en fazla 6 beceri/kelime.
+- criteriaMatch.criteria: SADECE şu 5 kategoriyi değerlendir: "Teknik Beceriler", "Deneyim & Kıdem", "Eğitim", "Dil Yetkinliği", "Lokasyon".
+- İlanda kriter belirtilmemişse status "met", detail "İlanda belirtilmemiş".
+- detail: en fazla 1 kısa cümle (Türkçe).
+- overallPercent: 0-100 arası genel uyum.
 
-Puanlama kuralları:
-- 85-100: Rol, sektör, beceri ve kıdem çok güçlü örtüşüyor
-- 70-84: İyi eşleşme, küçük eksikler var
-- 50-69: Orta uyum, bazı beceriler veya deneyim eksik
-- 30-49: Düşük uyum, önemli farklar var
-- 0-29: Neredeyse hiç uyum yok
-- Seniority uyumsuzluğu ciddi puan düşürücüdür`;
+Puanlama: 85-100 çok güçlü, 70-84 iyi, 50-69 orta, 30-49 düşük, 0-29 uyumsuz. Kıdem uyumsuzluğu puanı düşürür.`;
 
   const prompt = `ADAY PROFİLİ:
 ${cvContext}
 
 İŞ İLANLARI (${listingSummaries.length} adet):
-${JSON.stringify(listingSummaries, null, 2)}
+${JSON.stringify(listingSummaries)}
 
-Her ilan için uyum skorunu ve detaylı kriter analizini hesapla.`;
+Her ilan için skoru ve kısa kriter analizini üret.`;
 
-  const parsed = await generateJsonWithGemini<{ scores: Record<string, unknown>[] }>(systemInstruction, prompt);
+  const parsed = await generateJsonWithGemini<{ scores: Record<string, unknown>[] }>(systemInstruction, prompt, {
+    timeoutMs: SCORING_TIMEOUT_MS,
+    maxAttempts: SCORING_MAX_ATTEMPTS
+  });
 
-  return (parsed.scores ?? []).map((item) => ({
-    index: typeof item.index === "number" ? item.index : 0,
+  return (parsed.scores ?? []).map((item, fallbackIndex) => ({
+    index: parseIndex(item.index, fallbackIndex),
     score: clampScore(item.score),
     reasons: toStringArray(item.reasons).slice(0, 5),
     missingSkills: toStringArray(item.missingSkills).slice(0, 6),
@@ -171,6 +173,43 @@ Her ilan için uyum skorunu ve detaylı kriter analizini hesapla.`;
     matchedKeywords: toStringArray(item.matchedKeywords).slice(0, 10),
     criteriaMatch: parseCriteriaMatch(item.criteriaMatch)
   }));
+}
+
+/**
+ * Fallback results when AI scoring is unavailable (e.g. Gemini 403/timeout).
+ * Uses the cheap prefilter score so the user still sees ranked, REAL listings
+ * instead of an empty screen.
+ */
+function buildUnscoredResults(listings: CrawledJobListing[]): JobSearchResult[] {
+  return listings.slice(0, 10).map((listing, index) => {
+    const matchScore = normalizeCheapScore(listing.cheapScore);
+    return {
+      id: `${listing.platform}:${listing.externalId ?? listing.url}:unscored:${index + 1}`,
+      kind: "job",
+      platform: listing.platform,
+      category: listing.category,
+      title: listing.title,
+      company: listing.company,
+      location: listing.location,
+      workMode: listing.workMode ? getWorkModeDisplay(listing.workMode) : undefined,
+      query: listing.sourceQuery,
+      description: truncateText(listing.description || listing.requirements?.join(" ") || "İlan açıklaması parse edildi."),
+      url: listing.url,
+      matchScore,
+      matchReasons: ["Gerçek ilan detay linki bulundu; AI skoru alınamadı, ön eşleşme puanı kullanıldı."],
+      confidence: "low",
+      actionLabel: "İlanı Aç",
+      postedAt: listing.postedAt,
+      matchedKeywords: []
+    };
+  });
+}
+
+function normalizeCheapScore(cheapScore: number | undefined): number {
+  if (typeof cheapScore !== "number" || !Number.isFinite(cheapScore) || cheapScore <= 0) {
+    return 20;
+  }
+  return Math.min(55, Math.max(20, Math.round(cheapScore * 0.6)));
 }
 
 function buildCvContext(profile: CandidateProfile): string {
@@ -190,7 +229,7 @@ function buildCvContext(profile: CandidateProfile): string {
   if (profile.preferredRoles?.length) parts.push(`Tercih Edilen Roller: ${profile.preferredRoles.join(", ")}`);
 
   if (profile.fullText) {
-    parts.push(`\nCV Tam Metin (kısaltılmış):\n${profile.fullText.slice(0, 4000)}`);
+    parts.push(`\nCV Tam Metin (kısaltılmış):\n${profile.fullText.slice(0, 2000)}`);
   }
 
   return parts.join("\n");
@@ -240,6 +279,12 @@ function createBatches<T>(items: T[], size: number): T[][] {
 function clampScore(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
   return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function parseIndex(value: unknown, fallbackIndex: number) {
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  return fallbackIndex;
 }
 
 function toStringArray(value: unknown): string[] {

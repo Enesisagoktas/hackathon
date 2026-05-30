@@ -1,5 +1,6 @@
 import type { CvAnalysis } from "@/lib/extract-keywords";
 import { generateJsonWithGemini } from "@/lib/gemini";
+import { buildHeuristicEvaluation } from "@/lib/cv-fallback";
 
 export type CvScoreBreakdown = {
   format: number;
@@ -40,16 +41,23 @@ type EvaluateCvInput = {
 
 /**
  * AI-powered CV evaluation using Gemini.
- * No heuristic fallbacks.
+ * Falls back to a rule-based heuristic evaluation when Gemini is unavailable
+ * so the user is never left without an analysis.
  */
 export async function evaluateCv({ text, keywordAnalysis, fileType }: EvaluateCvInput): Promise<CvEvaluation> {
-  const systemInstruction = "Sen Türkiye pazarını bilen deneyimli bir İK uzmanısın. CV'yi 100 puan üzerinden değerlendir. Sadece geçerli JSON döndür. Adayı hukuka aykırı yaş, cinsiyet, medeni durum gibi kriterlerle değerlendirme. Stajyer özel değerlendirmesini yapma.";
-  
-  const prompt = createAiPrompt(text, keywordAnalysis, fileType);
-  
-  const parsed = await generateJsonWithGemini<Partial<CvEvaluation>>(systemInstruction, prompt);
-  
-  return sanitizeEvaluation(parsed, "ai");
+  try {
+    const systemInstruction = "Sen Türkiye pazarını bilen deneyimli bir İK uzmanısın. CV'yi 100 puan üzerinden değerlendir. Sadece geçerli JSON döndür. Adayı hukuka aykırı yaş, cinsiyet, medeni durum gibi kriterlerle değerlendirme. Stajyer özel değerlendirmesini yapma.";
+
+    const prompt = createAiPrompt(text, keywordAnalysis, fileType);
+
+    const parsed = await generateJsonWithGemini<Partial<CvEvaluation>>(systemInstruction, prompt);
+
+    return sanitizeEvaluation(parsed, "ai");
+  } catch (error) {
+    console.error("[evaluateCv] Gemini failed, using heuristic fallback:", error);
+    const heuristic = buildHeuristicEvaluation(text, keywordAnalysis.skills, keywordAnalysis.titles);
+    return sanitizeEvaluation(heuristic, "heuristic");
+  }
 }
 
 function createAiPrompt(text: string, keywordAnalysis: CvAnalysis, fileType: "pdf" | "docx") {

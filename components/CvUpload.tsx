@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, FormEvent, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, FileText, Loader2, UploadCloud } from "lucide-react";
 
 import type { JobSearchResult, JobSearchSummary } from "@/lib/job-search";
@@ -44,6 +44,7 @@ const ACCEPTED_TYPES = [
 
 export function CvUpload() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [registeredUser, setRegisteredUser] = useState<RegisteredUser | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [locationMode, setLocationMode] = useState<LocationMode>("all-turkey");
@@ -57,6 +58,15 @@ export function CvUpload() {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isSearchingJobs, setIsSearchingJobs] = useState(false);
+  const [searchProgress, setSearchProgress] = useState(0);
+
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -71,8 +81,15 @@ export function CvUpload() {
       return;
     }
 
+    if (locationMode === "cities" && !selectedCities.length) {
+      setError("İl seç modunda iş araması yapmak için en az bir il seçin.");
+      return;
+    }
+
+    stopPolling();
     setError(null);
     setIsUploading(true);
+    setSearchProgress(0);
     setJobResults([]);
     setFallbackResults([]);
     setJobSummary(null);
@@ -81,6 +98,10 @@ export function CvUpload() {
     try {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("locationMode", locationMode);
+      formData.append("cities", JSON.stringify(selectedCities));
+      formData.append("workMode", workMode);
+      formData.append("userEmail", registeredUser.email);
 
       const response = await fetch("/api/upload-cv", {
         method: "POST",
@@ -94,7 +115,6 @@ export function CvUpload() {
       }
 
       if (data.status === "pending" && data.searchId) {
-        // Start polling
         setIsUploading(false);
         setIsSearchingJobs(true);
         pollSearch(data.searchId);
@@ -107,7 +127,7 @@ export function CvUpload() {
   }
 
   async function pollSearch(searchId: number) {
-    let pollingInterval: ReturnType<typeof setInterval>;
+    stopPolling();
 
     const fetchStatus = async () => {
       try {
@@ -118,11 +138,14 @@ export function CvUpload() {
           throw new Error(data.message ?? "Durum sorgulanamadı.");
         }
 
+        setError(null);
+        setSearchProgress(typeof data.progress === "number" ? data.progress : 0);
+
         if (data.status === "completed") {
-          clearInterval(pollingInterval);
+          stopPolling();
           
           const profileResult = data.aiProfile;
-          if (profileResult) {
+          if (profileResult && data.evaluation) {
             setAnalysis({
               skills: profileResult.skills || [],
               titles: profileResult.titles || [],
@@ -149,18 +172,27 @@ export function CvUpload() {
           setFallbackResults([]); // Don't show fallback links in UX
           setJobSummary(data.summary ?? null);
           setIsSearchingJobs(false);
+          setSearchProgress(100);
         } else if (data.status === "failed") {
-          clearInterval(pollingInterval);
+          stopPolling();
           setError(data.errorMessage ?? "İşlem sırasında bir hata oluştu.");
           setIsSearchingJobs(false);
+          setSearchProgress(100);
         }
       } catch (error) {
-        // Ignore network errors and retry
+        setError(error instanceof Error ? error.message : "Durum sorgulanırken hata oluştu.");
       }
     };
 
-    pollingInterval = setInterval(fetchStatus, 10000);
+    pollingRef.current = setInterval(fetchStatus, 3000);
     fetchStatus();
+  }
+
+  function stopPolling() {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
   }
 
   async function searchJobs(nextAnalysis = analysis) {
@@ -173,9 +205,49 @@ export function CvUpload() {
       return;
     }
 
-    // Since the architecture is now background queue based, re-triggering search requires a new flow or it's not fully supported without uploading again.
-    // For simplicity, we can show an error or just let them re-upload.
-    setError("Filtre değiştirme özelliği şu an bakımda. Lütfen yeni CV yükleyerek filtreleri seçin.");
+    // Re-filtering hits the cache-first /api/search-jobs endpoint directly with
+    // the already-extracted profile. No re-upload and no live crawler.
+    stopPolling();
+    setError(null);
+    setIsSearchingJobs(true);
+    setSearchProgress(55);
+
+    try {
+      const response = await fetch("/api/search-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          skills: nextAnalysis.skills,
+          titles: nextAnalysis.titles,
+          languages: nextAnalysis.languages,
+          experienceAreas: nextAnalysis.experienceAreas,
+          searchKeywords: nextAnalysis.searchKeywords,
+          industries: nextAnalysis.industries,
+          aiProfile: nextAnalysis.aiProfile,
+          fullText: nextAnalysis.fullText,
+          locationMode,
+          cities: selectedCities,
+          workMode,
+          userEmail: registeredUser?.email
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message ?? "İş araması yapılamadı.");
+      }
+
+      const validJobs = (data.results || []).filter((result: JobSearchResult) => result.kind === "job");
+      setJobResults(validJobs);
+      setFallbackResults([]);
+      setJobSummary(data.summary ?? null);
+      setSearchProgress(100);
+    } catch (searchError) {
+      setError(searchError instanceof Error ? searchError.message : "İş araması sırasında hata oluştu.");
+    } finally {
+      setIsSearchingJobs(false);
+    }
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -192,10 +264,12 @@ export function CvUpload() {
 
   function selectFile(selectedFile: File | null) {
     setError(null);
+    stopPolling();
     setAnalysis(null);
     setJobResults([]);
     setFallbackResults([]);
     setJobSummary(null);
+    setSearchProgress(0);
 
     if (!selectedFile) {
       setFile(null);
@@ -296,13 +370,22 @@ export function CvUpload() {
 
             <div className="flex flex-col gap-3 rounded-3xl border bg-slate-50/80 p-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm leading-6 text-slate-600">
-                {isSearchingJobs ? "Sonuçlar hazırlanıyor, yaklaşık 10 dakika içinde hazır olacak. Lütfen sekmeyi kapatmayın..." : "Analizden sonra platformlar taranacak, gerçek ilan detayları parse edilip CV'nize göre sıralanacak."}
+                {isSearchingJobs ? `Sonuçlar hazırlanıyor. İlerleme: %${searchProgress}` : "Analizden sonra platformlar taranacak, gerçek ilan detayları parse edilip CV'nize göre sıralanacak."}
               </p>
               <Button className="self-end" disabled={!file || !registeredUser || isBusy} size="lg" type="submit">
                 {isBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 CV Analizini Başlat
               </Button>
             </div>
+
+            {isSearchingJobs ? (
+              <div className="overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-2 rounded-full bg-teal-600 transition-all duration-500"
+                  style={{ width: `${Math.max(5, Math.min(100, searchProgress))}%` }}
+                />
+              </div>
+            ) : null}
 
             {analysis ? (
               <Button

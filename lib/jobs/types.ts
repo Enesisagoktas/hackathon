@@ -1,17 +1,48 @@
 import type { LocationMode, WorkMode } from "@/lib/search-preferences";
 
+/**
+ * Known platforms get autocomplete, but DB-sourced names (e.g. crawler or
+ * sample data) may introduce others, so any string is also accepted.
+ */
 export type JobPlatform =
   | "Kariyer.net"
   | "Secretcv"
   | "Eleman.net"
   | "Yenibiriş"
   | "Toptalent"
+  | "Webrazzi Jobs"
   | "LinkedIn"
-  | "İŞKUR";
+  | "İŞKUR"
+  | (string & {});
 
 export type JobResultCategory = "recommended" | "general" | "tech" | "public";
 export type JobResultKind = "search" | "job";
 export type JobResultConfidence = "high" | "medium" | "low";
+
+/** Lifecycle status of a cached listing in job_listings. */
+export type JobListingStatus = "active" | "stale" | "expired" | "failed";
+
+/** A row from job_listings joined with its source, as used by the cache search. */
+export type JobListingRecord = {
+  id: number;
+  sourceId: number;
+  platform: JobPlatform;
+  category: JobResultCategory;
+  externalId?: string;
+  title: string;
+  company?: string;
+  location?: string;
+  workMode?: WorkMode;
+  description: string;
+  requirements: string[];
+  candidateCriteria: string[];
+  externalUrl: string;
+  sourceQuery?: string;
+  postedAt?: string;
+  status: JobListingStatus;
+  lastSeenAt?: string;
+  lastCheckedAt?: string;
+};
 
 /** Single requirement criterion for a job listing */
 export type CriteriaItem = {
@@ -165,6 +196,10 @@ export type CrawledJobListing = {
   url: string;
   sourceQuery: string;
   postedAt?: string;
+  /** Set when the listing came from the DB cache. */
+  listingId?: number;
+  /** Cheap (non-AI) prefilter score, used to normalize fallback results. */
+  cheapScore?: number;
 };
 
 export type JobAdapter = {

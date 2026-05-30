@@ -81,14 +81,14 @@ export function JobLinks({ results, fallbackResults = [], summary, isLoading = f
             <CardTitle className="text-xl">CV&apos;ye Uygun Gerçek İlanlar</CardTitle>
             <CardDescription className="mt-2">
               {summary
-                ? `${summary.targetRole} hedef rolü için ${summary.resultCount} gerçek ilan CV uyumuna göre sıralandı.`
+                ? `${summary.targetRole ?? "Hedef rol"} hedef rolü için ${summary.resultCount ?? results.length} gerçek ilan CV uyumuna göre sıralandı.`
                 : "Detay sayfası parse edilen ilanlar seçilen lokasyon ve çalışma modeline göre skorlandı."}
             </CardDescription>
           </div>
           {summary ? (
             <div className="rounded-2xl border bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              <p className="font-semibold text-slate-950">{summary.workMode}</p>
-              <p>{summary.locations.join(", ")}</p>
+              <p className="font-semibold text-slate-950">{summary.workMode ?? "Çalışma modeli fark etmez"}</p>
+              <p>{summary.locations?.length ? summary.locations.join(", ") : "Tüm Türkiye"}</p>
             </div>
           ) : null}
         </div>
@@ -120,7 +120,7 @@ export function JobLinks({ results, fallbackResults = [], summary, isLoading = f
 
         {summary ? (
           <div className="space-y-3 rounded-2xl border border-dashed bg-slate-50 p-4 text-sm leading-6 text-slate-600">
-            <p>{summary.sourceNote}</p>
+            <p>{summary.sourceNote ?? "Gerçek ilan detay linkleri CV uyumuna göre hazırlandı."}</p>
             {summary.crawlStatuses?.length ? (
               <div className="grid gap-2 md:grid-cols-2">
                 {summary.crawlStatuses.map((status) => (

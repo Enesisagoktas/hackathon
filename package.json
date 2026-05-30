@@ -7,7 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "worker": "tsx scripts/worker.ts"
+    "migrate": "tsx scripts/migrate.ts",
+    "worker": "tsx scripts/worker.ts",
+    "crawl:jobs": "tsx scripts/crawl-jobs.ts",
+    "verify:jobs": "tsx scripts/verify-jobs.ts",
+    "seed:jobs": "tsx scripts/import-sample-jobs.ts",
+    "make:cv": "tsx scripts/make-sample-cv.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

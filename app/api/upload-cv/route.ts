@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 
 import { extractDocxText } from "@/lib/extract-docx";
 import { extractPdfText } from "@/lib/extract-pdf";
-import { getDbPool } from "@/lib/db";
-import mysql from "mysql2/promise";
+import { enqueueJobSearch } from "@/lib/job-queue";
+import { ensureJobWorkerRunning } from "@/lib/job-worker";
+import { normalizeCities, normalizeLocationMode, normalizeWorkMode } from "@/lib/search-preferences";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,22 +41,29 @@ export async function POST(request: Request) {
       return errorResponse("CV metni okunamadı veya dosyada yeterli metin bulunamadı.", 422);
     }
 
-    // Save the request into MySQL as a pending search job
-    const pool = getDbPool();
-    const [result] = await pool.query<mysql.ResultSetHeader>(
-      `INSERT INTO job_searches 
-       (status, progress, cv_text, started_at) 
-       VALUES ('pending', 0, ?, NOW())`,
-      [text]
-    );
+    const locationMode = normalizeLocationMode(readFormString(formData, "locationMode"));
+    const cities = normalizeCities(parseJsonArray(readFormString(formData, "cities")));
+    const workMode = normalizeWorkMode(readFormString(formData, "workMode"));
+    const userEmail = sanitizeEmail(readFormString(formData, "userEmail"));
 
-    const readyAt = new Date();
-    readyAt.setMinutes(readyAt.getMinutes() + 10);
+    if (locationMode === "cities" && cities.length === 0) {
+      return errorResponse("İl seç modunda en az bir il seçin.", 400);
+    }
+
+    const { searchId } = await enqueueJobSearch({
+      cvText: text,
+      fileType,
+      userEmail,
+      locationMode,
+      cities,
+      workMode
+    });
+
+    ensureJobWorkerRunning();
 
     return NextResponse.json({
-      searchId: result.insertId,
+      searchId,
       status: "pending",
-      readyAt: readyAt.toISOString(),
       message: "İşlem kuyruğa alındı."
     });
   } catch (error) {
@@ -87,6 +95,33 @@ function isUploadFile(value: FormDataEntryValue | null): value is File {
     "size" in value &&
     typeof value.arrayBuffer === "function"
   );
+}
+
+function readFormString(formData: FormData, key: string) {
+  const value = formData.get(key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseJsonArray(value: string | undefined) {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function sanitizeEmail(value: string | undefined) {
+  if (!value) {
+    return undefined;
+  }
+
+  const email = value.trim().toLocaleLowerCase("tr-TR").slice(0, 190);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined;
 }
 
 function errorResponse(message: string, status: number) {

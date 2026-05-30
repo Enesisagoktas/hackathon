@@ -38,21 +38,25 @@ async function ensureBrowser(): Promise<BrowserLike> {
     try {
       // Dynamic import so the module works even when puppeteer is not installed
       const puppeteer = await import("puppeteer");
-      const instance = await puppeteer.default.launch({
-        headless: true,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-gpu",
-          "--disable-extensions",
-          "--disable-background-networking",
-          "--disable-default-apps",
-          "--disable-sync",
-          "--no-first-run",
-          "--no-zygote"
-        ]
-      });
+      const instance = await withTimeout(
+        puppeteer.default.launch({
+          headless: true,
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-default-apps",
+            "--disable-sync",
+            "--no-first-run",
+            "--no-zygote"
+          ]
+        }),
+        Number(process.env.PUPPETEER_LAUNCH_TIMEOUT_MS ?? 20000),
+        "Puppeteer başlatma zaman aşımına uğradı."
+      );
 
       browser = instance as unknown as BrowserLike;
       puppeteerAvailable = true;
@@ -136,4 +140,21 @@ export async function closeBrowser(): Promise<void> {
 
   browser = null;
   browserPromise = null;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }

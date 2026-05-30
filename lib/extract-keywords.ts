@@ -1,5 +1,6 @@
 import type { AiCvProfile } from "@/lib/jobs/types";
 import { generateJsonWithGemini } from "@/lib/gemini";
+import { buildHeuristicProfile } from "@/lib/cv-fallback";
 
 export type CvAnalysis = {
   skills: string[];
@@ -12,13 +13,25 @@ export type CvAnalysis = {
 
 export type AiExtractedProfile = CvAnalysis & {
   aiProfile: AiCvProfile;
+  /** "ai" when Gemini produced it, "heuristic" when the rule-based fallback ran. */
+  source?: "ai" | "heuristic";
 };
 
 /**
  * Extract a rich CV profile using Gemini AI.
- * No fallbacks, purely dynamic based on CV content.
+ * Falls back to a rule-based heuristic profile when Gemini is unavailable
+ * (missing key, 403, timeout) so the flow never dead-ends on a blank screen.
  */
 export async function extractProfileFromCv(text: string): Promise<AiExtractedProfile> {
+  try {
+    return await extractProfileWithGemini(text);
+  } catch (error) {
+    console.error("[extractProfileFromCv] Gemini failed, using heuristic fallback:", error);
+    return buildHeuristicProfile(text);
+  }
+}
+
+async function extractProfileWithGemini(text: string): Promise<AiExtractedProfile> {
   const cvText = text.slice(0, 14000);
 
   const systemInstruction = `Sen uzman bir İK analisti ve CV parserısın. Verilen CV metnini analiz edip yapılandırılmış JSON çıktı üret.
@@ -75,6 +88,7 @@ function sanitizeAiProfile(parsed: Record<string, unknown>): AiExtractedProfile 
   const searchKeywords = toStringArray(parsed.searchKeywords).slice(0, 40);
 
   return {
+    source: "ai",
     skills,
     titles,
     languages,

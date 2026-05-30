@@ -6,7 +6,7 @@ import {
   type LocationMode,
   type WorkMode
 } from "@/lib/search-preferences";
-import { crawlJobs } from "@/lib/jobs/crawler";
+import { searchCachedListings } from "@/lib/jobs/search-cache";
 import { scoreListingsWithAi } from "@/lib/jobs/score";
 import type {
   AiCvProfile,
@@ -155,135 +155,79 @@ export function generateJobSearchResults(input: SearchJobsInput): JobSearchRespo
   };
 }
 
+/**
+ * Cache-first job matching. This is the function the user-facing flow calls.
+ * It reads active listings from the DB cache and scores them with AI.
+ * It NEVER triggers the live crawler — crawling happens only in the background
+ * via `npm run crawl:jobs`.
+ */
 export async function searchJobListings(input: SearchJobsInput): Promise<JobSearchResponse> {
-  const fallback = generateJobSearchResults(input);
-  const profile = buildCandidateProfile(input, fallback.summary.targetRole);
+  const profile = buildCandidateProfile(input, "Genel aday profili");
+  const baseSummary: JobSearchSummary = {
+    targetRole: profile.targetRole,
+    primarySkills: profile.skills.slice(0, MAX_PRIMARY_SKILLS),
+    locations: profile.locations,
+    workMode: getWorkModeDisplay(profile.workMode),
+    resultCount: 0,
+    realJobCount: 0,
+    fallbackCount: 0,
+    sourceNote: ""
+  };
 
   try {
-    const crawlResult = await crawlJobs(profile);
+    const candidates = await searchCachedListings(profile);
 
-    // AI scoring using Gemini
-    let realResults: JobSearchResult[] = [];
-    if (crawlResult.listings.length > 0) {
-      realResults = await scoreListingsWithAi(crawlResult.listings, profile);
+    if (candidates.length === 0) {
+      return {
+        results: [],
+        fallbackResults: [],
+        summary: {
+          ...baseSummary,
+          errorType: "no_match",
+          sourceNote:
+            "Veritabanı cache'inde uygun aktif ilan bulunamadı. Arka planda `npm run seed:jobs` veya `npm run crawl:jobs` ile cache doldurulabilir."
+        }
+      };
     }
 
-    // Apply hard filters for location and work mode
-    const filteredResults = applyHardFilters(realResults, profile);
-
-    const parsedCount = crawlResult.statuses.reduce((sum, status) => sum + status.parsedListings, 0);
-    const discoveredCount = crawlResult.statuses.reduce((sum, status) => sum + status.discoveredUrls, 0);
-
-    const errorType = determineErrorType(crawlResult.statuses, filteredResults.length, discoveredCount, parsedCount);
+    const scored = await scoreListingsWithAi(candidates, profile);
+    const results = scored
+      .filter((result) => result.kind === "job")
+      .sort((left, right) => right.matchScore - left.matchScore);
 
     return {
-      results: filteredResults,
-      fallbackResults: fallback.results.slice(0, 6),
+      results,
+      fallbackResults: [],
       summary: {
-        ...fallback.summary,
-        primarySkills: profile.skills.slice(0, MAX_PRIMARY_SKILLS),
-        locations: profile.locations,
-        resultCount: filteredResults.length,
-        realJobCount: filteredResults.length,
-        fallbackCount: fallback.results.length,
-        crawlStatuses: crawlResult.statuses,
-        errorType,
-        sourceNote: buildSourceNote(filteredResults.length, parsedCount, discoveredCount, errorType)
+        ...baseSummary,
+        resultCount: results.length,
+        realJobCount: results.length,
+        errorType: results.length ? "none" : "no_match",
+        sourceNote: buildCacheSourceNote(results.length, candidates.length)
       }
     };
   } catch (error) {
+    console.error("[searchJobListings] cache search failed:", error);
     return {
       results: [],
-      fallbackResults: fallback.results.slice(0, 6),
+      fallbackResults: [],
       summary: {
-        ...fallback.summary,
-        resultCount: 0,
-        realJobCount: 0,
-        fallbackCount: fallback.results.length,
+        ...baseSummary,
         errorType: "crawler_failed",
         sourceNote:
           error instanceof Error
-            ? `Crawler çalışırken hata oluştu: ${error.message}. Yedek arama linkleri aşağıda sunuldu.`
-            : "Crawler çalışırken hata oluştu. Yedek arama linkleri aşağıda sunuldu."
+            ? `İlan eşleştirme sırasında hata oluştu: ${error.message}`
+            : "İlan eşleştirme sırasında beklenmeyen bir hata oluştu."
       }
     };
   }
 }
 
-/** Apply hard filters: location and work mode are NOT just bonuses, they eliminate */
-function applyHardFilters(results: JobSearchResult[], profile: CandidateProfile): JobSearchResult[] {
-  return results.filter((result) => {
-    // Location hard filter: if user selected specific cities, exclude non-matching
-    if (profile.locationMode === "cities" && profile.locations.length > 0 && result.location) {
-      const locationText = result.location.toLocaleLowerCase("tr-TR");
-      const hasMatch = profile.locations.some((city) =>
-        locationText.includes(city.toLocaleLowerCase("tr-TR"))
-      );
-      // Allow if location matches OR if result has no clear location (might be remote)
-      if (!hasMatch && locationText.length > 3) {
-        // Check if it might be remote
-        if (result.workMode && /uzaktan|remote/i.test(result.workMode)) {
-          // Remote jobs pass location filter
-        } else {
-          return false;
-        }
-      }
-    }
-
-    // Work mode hard filter
-    if (profile.workMode === "remote" && result.workMode) {
-      const mode = result.workMode.toLocaleLowerCase("tr-TR");
-      if (/ofisten|onsite|yerinde/i.test(mode) && !/uzaktan|remote|hibrit|hybrid/i.test(mode)) {
-        return false;
-      }
-    }
-
-    if (profile.workMode === "onsite" && result.workMode) {
-      const mode = result.workMode.toLocaleLowerCase("tr-TR");
-      if (/uzaktan|remote/i.test(mode) && !/ofis|onsite|hibrit|hybrid/i.test(mode)) {
-        return false;
-      }
-    }
-
-    return true;
-  });
-}
-
-function determineErrorType(
-  statuses: { status: string; parsedListings: number; discoveredUrls: number; message?: string }[],
-  resultCount: number,
-  discoveredCount: number,
-  parsedCount: number
-): "no_match" | "crawler_failed" | "parser_error" | "query_issue" | "none" {
-  if (resultCount > 0) return "none";
-  
-  const allFailed = statuses.every((s) => s.status === "failed");
-  if (allFailed) return "crawler_failed";
-  
-  if (parsedCount > 0 && resultCount === 0) return "no_match";
-  if (discoveredCount > 0 && parsedCount === 0) return "parser_error";
-  if (discoveredCount === 0) return "query_issue";
-  
-  return "no_match";
-}
-
-function buildSourceNote(resultCount: number, parsedCount: number, discoveredCount: number, errorType: string): string {
+function buildCacheSourceNote(resultCount: number, candidateCount: number): string {
   if (resultCount > 0) {
-    return `${discoveredCount} gerçek ilan linki keşfedildi, ${parsedCount} ilan detayı parse edildi ve ${resultCount} ilan CV uyumuna göre AI ile sıralandı.`;
+    return `Veritabanı cache'inden ${candidateCount} aktif ilan değerlendirildi; CV uyumuna göre ${resultCount} gerçek ilan sıralandı.`;
   }
-
-  switch (errorType) {
-    case "crawler_failed":
-      return "Platformlara erişim sağlanamadı. Siteler geçici olarak erişilemez olabilir veya anti-bot koruması devreye girmiş olabilir. Yedek arama linkleri aşağıda sunuldu.";
-    case "parser_error":
-      return `${discoveredCount} ilan linki keşfedildi ancak detay sayfaları parse edilemedi. Site yapısı değişmiş olabilir. Yedek arama linkleri aşağıda sunuldu.`;
-    case "query_issue":
-      return "Arama sorguları sonuç üretemedi. CV'deki profil için daha geniş arama terimleri denenebilir. Yedek arama linkleri aşağıda sunuldu.";
-    case "no_match":
-      return `${parsedCount} ilan parse edildi ancak CV profilinizle yeterli uyum sağlanamadı. Yedek arama linkleri aşağıda sunuldu.`;
-    default:
-      return "Sonuç bulunamadı. Yedek arama linkleri aşağıda sunuldu.";
-  }
+  return `${candidateCount} aktif ilan değerlendirildi ancak CV profilinizle yeterli uyum sağlanamadı.`;
 }
 
 function buildCandidateProfile(input: SearchJobsInput, fallbackTargetRole: string): CandidateProfile {

@@ -51,9 +51,10 @@ CREATE TABLE IF NOT EXISTS job_listings (
   parse_status ENUM('parsed', 'summary_only', 'failed') NOT NULL DEFAULT 'parsed',
   parse_version VARCHAR(40) NULL,
   error_count INT UNSIGNED NOT NULL DEFAULT 0,
-  status ENUM('active', 'stale', 'expired') NOT NULL DEFAULT 'active',
+  status ENUM('active', 'stale', 'expired', 'failed') NOT NULL DEFAULT 'active',
   first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_checked_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS job_listings (
   KEY job_listings_location_idx (location),
   KEY job_listings_work_mode_idx (work_mode),
   KEY job_listings_status_seen_idx (status, last_seen_at),
+  KEY job_listings_status_checked_idx (status, last_checked_at),
   FULLTEXT KEY job_listings_fulltext_idx (title, company, description),
   CONSTRAINT job_listings_source_fk FOREIGN KEY (source_id) REFERENCES job_sources(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -90,10 +92,12 @@ CREATE TABLE IF NOT EXISTS job_searches (
   status ENUM('pending', 'processing', 'completed', 'failed') NOT NULL DEFAULT 'pending',
   progress TINYINT UNSIGNED NOT NULL DEFAULT 0,
   cv_text MEDIUMTEXT NULL,
+  file_type ENUM('pdf', 'docx') NULL,
 
   target_role VARCHAR(190) NULL,
   skills JSON NULL,
   titles JSON NULL,
+  location_mode ENUM('all-turkey', 'cities') NOT NULL DEFAULT 'all-turkey',
   cities JSON NULL,
   work_mode ENUM('any', 'remote', 'hybrid', 'onsite') NOT NULL DEFAULT 'any',
 
@@ -104,16 +108,20 @@ CREATE TABLE IF NOT EXISTS job_searches (
 
   result_count INT UNSIGNED NOT NULL DEFAULT 0,
   error_message TEXT NULL,
+  attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  locked_at DATETIME NULL,
 
   started_at DATETIME NULL,
   ready_at DATETIME NULL,
   completed_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (id),
   KEY job_searches_user_email_idx (user_email),
   KEY job_searches_created_at_idx (created_at),
-  KEY job_searches_status_idx (status)
+  KEY job_searches_status_idx (status),
+  KEY job_searches_locked_idx (status, locked_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS job_search_results (

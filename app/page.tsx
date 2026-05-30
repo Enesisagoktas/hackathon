@@ -8,31 +8,31 @@ export default function Home() {
         <div className="order-2 space-y-8 lg:sticky lg:top-8 lg:order-1">
           <div className="space-y-5">
             <Badge className="border-teal-200 bg-white/80 text-teal-700 shadow-sm" variant="outline">
-              Türkiye odaklı CV ve iş arama asistanı
+              Türkiye odaklı CV analizi ve gerçek ilan eşleştirme
             </Badge>
             <div className="space-y-4">
               <h1 className="max-w-2xl text-balance text-4xl font-semibold tracking-tight text-slate-950 md:text-6xl">
-                CV’nizi analiz edip daha doğru iş arama rotaları çıkarın.
+                CV’nizi yükleyin, size uygun gerçek iş ilanlarını saniyeler içinde bulalım.
               </h1>
               <p className="max-w-xl text-lg leading-8 text-slate-600">
-                CVMatch, PDF veya DOCX CV içeriğini analiz eder; hedef rol, beceri ve lokasyon tercihlerinize göre Türk iş
-                platformlarında kırık link üretmeyen, skorlanmış arama önerileri hazırlar.
+                CVMatch, PDF veya DOCX CV içeriğinizi AI ile analiz eder; veritabanındaki aktif gerçek ilanlar arasından
+                profilinize en uygun olanları skorlar ve doğrudan ilan detay linkleriyle listeler. Canlı tarama beklemezsiniz.
               </p>
             </div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3 lg:max-w-xl">
             {[
-              ["1", "CV yükle"],
-              ["2", "Rol ve becerileri çıkar"],
-              ["3", "Skorlu arama rotası aç"]
-            ].map(([step, label]) => (
+              ["1", "CV yükle", "PDF/DOCX, en fazla 5 MB."],
+              ["2", "AI profil & değerlendirme", "Beceri, rol ve CV puanı çıkar."],
+              ["3", "Gerçek ilanları eşleştir", "Doğrudan ilan detay linkleri."]
+            ].map(([step, label, hint]) => (
               <div key={step} className="rounded-2xl border bg-white/75 p-4 shadow-sm backdrop-blur">
                 <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-full bg-teal-600 text-sm font-semibold text-white">
                   {step}
                 </div>
                 <p className="font-medium text-slate-900">{label}</p>
-                <p className="mt-1 text-sm text-slate-500">CV dosyası saklanmadan analiz edilir.</p>
+                <p className="mt-1 text-sm text-slate-500">{hint}</p>
               </div>
             ))}
           </div>

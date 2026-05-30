@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 
-import type { CandidateProfile, CrawlJobsResult, CrawledJobListing, JobAdapter, PlatformCrawlStatus, PlatformSelectors } from "@/lib/jobs/types";
+import type { CandidateProfile, CrawlJobsResult, CrawledJobListing, JobAdapter, JobPlatform, PlatformCrawlStatus, PlatformSelectors } from "@/lib/jobs/types";
 import type { WorkMode } from "@/lib/search-preferences";
 import {
   absoluteUrl,
@@ -21,10 +21,21 @@ import {
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 CVMatchBot/1.0";
 const FETCH_TIMEOUT_MS = Number(process.env.CRAWLER_FETCH_TIMEOUT_MS ?? 9000);
+const FETCH_HARD_TIMEOUT_MS = Number(process.env.CRAWLER_FETCH_HARD_TIMEOUT_MS ?? FETCH_TIMEOUT_MS * 2 + 8000);
 const MAX_SEARCH_URLS_PER_PLATFORM = Number(process.env.CRAWLER_MAX_SEARCH_URLS_PER_PLATFORM ?? 2);
-const MAX_DETAILS_PER_PLATFORM = Number(process.env.CRAWLER_MAX_DETAILS_PER_PLATFORM ?? 8);
-const MAX_CONCURRENT_PLATFORMS = Number(process.env.CRAWLER_MAX_CONCURRENT_PLATFORMS ?? 1);
-const MAX_CONCURRENT_DETAILS = Number(process.env.CRAWLER_MAX_CONCURRENT_DETAILS ?? 4);
+const MAX_DETAILS_PER_PLATFORM = Number(process.env.CRAWLER_MAX_DETAILS_PER_PLATFORM ?? 4);
+const MAX_CONCURRENT_PLATFORMS = Number(process.env.CRAWLER_MAX_CONCURRENT_PLATFORMS ?? 6);
+const MAX_CONCURRENT_DETAILS = Number(process.env.CRAWLER_MAX_CONCURRENT_DETAILS ?? 3);
+const PLATFORM_REQUEST_INTERVAL_MS = Number(process.env.CRAWLER_PLATFORM_REQUEST_INTERVAL_MS ?? 2000);
+const CRAWLER_DEADLINE_MS = Number(process.env.CRAWLER_DEADLINE_MS ?? 90000);
+
+const platformRequestQueues = new Map<JobPlatform, { lastRequestAt: number; queue: Promise<void> }>();
+
+class CrawlDeadlineError extends Error {
+  constructor() {
+    super("Crawler genel süre sınırına ulaştı; eldeki sonuçlarla devam edildi.");
+  }
+}
 
 // ─── Platform-Specific Selectors ────────────────────────────────────────────
 
@@ -137,24 +148,24 @@ const JOB_ADAPTERS: JobAdapter[] = [
   }
 ];
 
+// LinkedIn is excluded from the MVP by default (aggressive anti-bot). Opt in
+// with CRAWLER_ENABLE_LINKEDIN=true.
+const ENABLE_LINKEDIN = /^(1|true|yes|on)$/i.test(process.env.CRAWLER_ENABLE_LINKEDIN ?? "");
+
+function getActiveAdapters(): JobAdapter[] {
+  return JOB_ADAPTERS.filter((adapter) => adapter.platform !== "LinkedIn" || ENABLE_LINKEDIN);
+}
+
 export async function crawlJobs(profile: CandidateProfile): Promise<CrawlJobsResult> {
   const queries = buildCrawlQueries(profile);
-  
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-  const adapterResults = [];
-  
-  for (let i = 0; i < JOB_ADAPTERS.length; i++) {
-    const adapter = JOB_ADAPTERS[i];
-    console.log(`[Crawler] Starting platform: ${adapter.platform}...`);
-    const result = await crawlAdapter(adapter, queries, profile);
-    adapterResults.push(result);
-    
-    // Minimum 60s between platform hits, skip delay on the last platform
-    if (i < JOB_ADAPTERS.length - 1) {
-      console.log(`[Crawler] Rate limit: Waiting 60 seconds before next platform...`);
-      await sleep(60000);
-    }
-  }
+  const deadlineAt = Date.now() + CRAWLER_DEADLINE_MS;
+  const adapterResults = await runLimited(
+    getActiveAdapters().map((adapter) => () => {
+      console.log(`[Crawler] Starting platform: ${adapter.platform}...`);
+      return crawlAdapter(adapter, queries, profile, deadlineAt);
+    }),
+    Math.max(1, MAX_CONCURRENT_PLATFORMS)
+  );
 
   const listings = uniqListings(adapterResults.flatMap((result) => result.listings));
   const statuses = adapterResults.map((result) => result.status);
@@ -197,7 +208,8 @@ function buildCrawlQueries(profile: CandidateProfile) {
 async function crawlAdapter(
   adapter: JobAdapter,
   queries: string[],
-  profile: CandidateProfile
+  profile: CandidateProfile,
+  deadlineAt: number
 ): Promise<{ listings: CrawledJobListing[]; status: PlatformCrawlStatus }> {
   const startedStatus: PlatformCrawlStatus = {
     platform: adapter.platform,
@@ -220,14 +232,28 @@ async function crawlAdapter(
   }
 
   try {
+    assertWithinDeadline(deadlineAt);
+
     const searchUrls = uniq(queries.flatMap((query) => adapter.buildSearchUrls(query, profile))).slice(
       0,
       MAX_SEARCH_URLS_PER_PLATFORM
     );
     const discoveredByUrl = new Map<string, string>();
+    let hitDeadline = false;
 
     for (const searchUrl of searchUrls) {
-      const html = await fetchHtml(searchUrl).catch(() => "");
+      if (isDeadlineExceeded(deadlineAt)) {
+        hitDeadline = true;
+        break;
+      }
+
+      const html = await fetchPlatformHtml(adapter.platform, searchUrl, deadlineAt).catch((error) => {
+        if (error instanceof CrawlDeadlineError) {
+          hitDeadline = true;
+        }
+
+        return "";
+      });
 
       if (!html) {
         continue;
@@ -248,7 +274,18 @@ async function crawlAdapter(
 
     const parsedListings = await runLimited(
       detailEntries.map(([url, sourceQuery]) => async () => {
-        const html = await fetchHtml(url).catch(() => "");
+        if (isDeadlineExceeded(deadlineAt)) {
+          hitDeadline = true;
+          return null;
+        }
+
+        const html = await fetchPlatformHtml(adapter.platform, url, deadlineAt).catch((error) => {
+          if (error instanceof CrawlDeadlineError) {
+            hitDeadline = true;
+          }
+
+          return "";
+        });
 
         if (!html) {
           return null;
@@ -260,10 +297,14 @@ async function crawlAdapter(
     );
     const listings = parsedListings.filter((listing): listing is CrawledJobListing => Boolean(listing));
     const crawlStatus: PlatformCrawlStatus["status"] = listings.length
-      ? listings.length < detailEntries.length
+      ? hitDeadline
+        ? "timeout"
+        : listings.length < detailEntries.length
         ? "partial"
         : "success"
-      : "empty";
+      : hitDeadline
+        ? "timeout"
+        : "empty";
 
     return {
       listings,
@@ -273,7 +314,9 @@ async function crawlAdapter(
         searchedUrls: searchUrls.length,
         discoveredUrls: discoveredByUrl.size,
         parsedListings: listings.length,
-        message: listings.length
+        message: hitDeadline
+          ? "Crawler süre sınırına ulaştı; eldeki ilanlarla devam edildi."
+          : listings.length
           ? undefined
           : discoveredByUrl.size
             ? "İlan URL'leri bulundu ama detay sayfaları parse edilemedi."
@@ -281,19 +324,61 @@ async function crawlAdapter(
       }
     };
   } catch (error) {
+    const status = error instanceof CrawlDeadlineError ? "timeout" : "failed";
+
     return {
       listings: [],
       status: {
         ...startedStatus,
-        status: "failed" as const,
+        status,
         message: error instanceof Error ? error.message : "Crawler hata verdi."
       }
     };
   }
 }
 
+async function fetchPlatformHtml(platform: JobPlatform, url: string, deadlineAt: number) {
+  let state = platformRequestQueues.get(platform);
+
+  if (!state) {
+    state = { lastRequestAt: 0, queue: Promise.resolve() };
+    platformRequestQueues.set(platform, state);
+  }
+
+  const request = state.queue.then(async () => {
+    assertWithinDeadline(deadlineAt);
+
+    const elapsed = Date.now() - state.lastRequestAt;
+    const waitMs = state.lastRequestAt ? Math.max(0, PLATFORM_REQUEST_INTERVAL_MS - elapsed) : 0;
+
+    if (waitMs > 0) {
+      const remainingMs = deadlineAt - Date.now();
+
+      if (remainingMs <= waitMs) {
+        throw new CrawlDeadlineError();
+      }
+
+      console.log(`[Crawler] ${platform} rate limit: waiting ${Math.ceil(waitMs / 1000)}s before ${url}`);
+      await sleep(waitMs);
+    }
+
+    assertWithinDeadline(deadlineAt);
+    state.lastRequestAt = Date.now();
+    return withTimeout(fetchHtml(url), FETCH_HARD_TIMEOUT_MS, `Crawler isteği zaman aşımına uğradı: ${url}`);
+  });
+
+  state.queue = request.then(() => undefined, () => undefined);
+  return request;
+}
+
 async function fetchHtml(url: string) {
-  // Try browser-based fetch first (handles JS rendering + anti-bot)
+  const regularHtml = await fetchHtmlRegular(url).catch(() => "");
+
+  if (regularHtml && regularHtml.length > 500) {
+    return regularHtml;
+  }
+
+  // Browser fallback handles JS rendering and anti-bot pages, but only after fast fetch fails.
   try {
     const { fetchWithBrowser, checkBrowserAvailability } = await import("@/lib/jobs/browser-pool");
     const available = await checkBrowserAvailability();
@@ -306,11 +391,10 @@ async function fetchHtml(url: string) {
       }
     }
   } catch {
-    // Browser not available or failed — fall through to regular fetch
+    // Browser not available or failed; return the regular response if it had anything useful.
   }
 
-  // Fallback to regular fetch
-  return fetchHtmlRegular(url);
+  return regularHtml;
 }
 
 async function fetchHtmlRegular(url: string) {
@@ -645,4 +729,35 @@ function uniqListings(listings: CrawledJobListing[]) {
 
 function joinQuery(parts: Array<string | undefined>) {
   return parts.map((part) => part?.trim()).filter(Boolean).join(" ");
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function assertWithinDeadline(deadlineAt: number) {
+  if (isDeadlineExceeded(deadlineAt)) {
+    throw new CrawlDeadlineError();
+  }
+}
+
+function isDeadlineExceeded(deadlineAt: number) {
+  return Date.now() >= deadlineAt;
 }
