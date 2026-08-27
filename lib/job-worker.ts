@@ -18,6 +18,8 @@ const SEARCH_TIMEOUT_MS = readPositiveNumber(process.env.JOB_SEARCH_TIMEOUT_MS, 
 const STALE_PROCESSING_MINUTES = readPositiveNumber(process.env.JOB_STALE_PROCESSING_MINUTES, 2);
 /** Bir iş bu kadar denemeden sonra kalıcı olarak 'failed' yapılır. */
 const MAX_JOB_ATTEMPTS = readPositiveNumber(process.env.JOB_MAX_ATTEMPTS, 4);
+/** Başvuru üretmeden önce en fazla kaç ilan canlı doğrulanır. */
+const VERIFY_BEFORE_APPLY_LIMIT = readPositiveNumber(process.env.VERIFY_BEFORE_APPLY_LIMIT, 15);
 
 let backgroundWorkerRunning = false;
 
@@ -261,12 +263,23 @@ async function processClaimedJob(job: JobSearchQueueRow) {
     SEARCH_TIMEOUT_MS
   );
 
-  const finalResults = searchPayload.results.filter((result) => result.kind === "job");
+  const scoredResults = searchPayload.results.filter((result) => result.kind === "job");
+
+  // Başvuru üretmeden ÖNCE ilanların hâlâ yayında olduğunu doğrula.
+  // Cache'teki bir ilan kapanmış olabilir; doğrulamadan devam edersek kapalı
+  // ilana özel CV + ön yazı üretilir, hatta e-posta varsa otomatik gönderilir.
+  const { alive, closedCount } = await dropClosedListings(scoredResults);
+
+  const finalResults = alive;
   const summary = {
     ...searchPayload.summary,
     resultCount: finalResults.length,
     realJobCount: finalResults.length,
-    fallbackCount: 0
+    fallbackCount: 0,
+    sourceNote:
+      closedCount > 0
+        ? `${searchPayload.summary.sourceNote} ${closedCount} ilan yayından kalkmış olduğu için listeden çıkarıldı.`
+        : searchPayload.summary.sourceNote
   };
 
   // Eşleşen ilanlar için CV uyarlama + başvuru paketi üretimi.
@@ -397,6 +410,64 @@ async function markJobFailed(jobId: number, error: unknown) {
      WHERE id = ? AND status = 'processing'`,
     [message.slice(0, 2000), jobId]
   );
+}
+
+/**
+ * Başvuru paketi üretmeden önce ilanların hâlâ açık olduğunu doğrular.
+ *
+ * `verifyListing` bugüne kadar YALNIZCA elle çalıştırılan `npm run verify:jobs`
+ * içinden çağrılıyordu; kullanıcı akışında hiç devreye girmiyordu. Sonuç:
+ * kapanan bir ilan 30 gün boyunca "aktif" kalıp önerilebiliyor, ona özel CV
+ * üretilebiliyor ve e-posta kanalı varsa otomatik başvuru gidebiliyordu.
+ *
+ * Doğrulanamayan (ağ hatası veren) ilanlar listede BIRAKILIR: geçici bir hata
+ * yüzünden gerçek fırsatı silmek, kapalı ilan göstermekten daha kötü.
+ */
+async function dropClosedListings(
+  results: JobSearchResult[]
+): Promise<{ alive: JobSearchResult[]; closedCount: number }> {
+  const checkable = results.filter((result) => result.listingId != null).slice(0, VERIFY_BEFORE_APPLY_LIMIT);
+
+  if (!checkable.length) {
+    return { alive: results, closedCount: 0 };
+  }
+
+  const { verifyListing } = await import("@/lib/jobs/verifier");
+  const { getListingsForVerification } = await import("@/lib/jobs/repository");
+
+  // Doğrulayıcı tam kayıt ister; id -> kayıt eşlemesi için havuzu okuruz.
+  const pool = await getListingsForVerification(500).catch(() => []);
+  const byId = new Map(pool.map((record) => [record.id, record]));
+
+  const closedIds = new Set<number>();
+
+  await Promise.all(
+    checkable.map(async (result) => {
+      const record = byId.get(Number(result.listingId));
+      if (!record) {
+        return;
+      }
+
+      try {
+        const outcome = await verifyListing(record);
+        if (outcome.decision === "expired") {
+          closedIds.add(record.id);
+          console.log(`[Worker] İlan kapanmış, listeden çıkarıldı: ${record.title} (${outcome.reason})`);
+        }
+      } catch {
+        // Doğrulanamadı: şüpheden yararlansın, listede kalsın.
+      }
+    })
+  );
+
+  if (!closedIds.size) {
+    return { alive: results, closedCount: 0 };
+  }
+
+  return {
+    alive: results.filter((result) => result.listingId == null || !closedIds.has(Number(result.listingId))),
+    closedCount: closedIds.size
+  };
 }
 
 /** JSON alanından güvenli string listesi çıkarır. */

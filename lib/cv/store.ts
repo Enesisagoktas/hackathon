@@ -84,6 +84,38 @@ export async function savePrimaryCv(input: SaveCvInput): Promise<number> {
   return result.insertId;
 }
 
+/**
+ * Yeni bir CV yüklendiğinde eski CV'den üretilmiş, HENÜZ GÖNDERİLMEMİŞ
+ * başvuruları temizler.
+ *
+ * Gerekçe: her başvurunun CV'si o ilana göre eski CV'den yeniden yazılmıştır.
+ * Kullanıcı CV'sini değiştirdiyse bu paketler bayattır — üzerlerindeki
+ * "Gönder" tuşuna basınca eski CV gider. Kullanıcı da haklı olarak
+ * "CV'yi değiştirdim ama eski veriler duruyor" diyor.
+ *
+ * GÖNDERİLMİŞ başvurular korunur: onlar geçmiş kaydıdır, gerçekten
+ * yapılmış bir başvuruyu silmek bilgi kaybı olur. Elle "başvurdum" denenler de
+ * (status='sent') aynı sebeple kalır.
+ */
+export async function clearStaleApplications(userId: number): Promise<number> {
+  const pool = getDbPool();
+
+  const [result] = await pool.query<mysql.ResultSetHeader>(
+    `DELETE FROM job_applications
+     WHERE user_id = ?
+       AND status IN ('preparing', 'needs_review', 'queued', 'manual_required', 'skipped', 'failed')`,
+    [userId]
+  );
+
+  if (result.affectedRows) {
+    console.log(
+      `[cv/store] Kullanıcı ${userId}: yeni CV yüklendi, ${result.affectedRows} gönderilmemiş başvuru temizlendi.`
+    );
+  }
+
+  return result.affectedRows;
+}
+
 /** Yapılandırılmış CV çıkarımı sonradan tamamlandığında kaydı günceller. */
 export async function updateStructuredCv(cvId: number, structuredCv: StructuredCv): Promise<void> {
   const pool = getDbPool();

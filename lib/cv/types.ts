@@ -129,3 +129,31 @@ export type TailoringListing = {
   candidateCriteria: string[];
   url: string;
 };
+
+/**
+ * Veritabanından okunan CV'yi çizim için güvenli hale getirir.
+ *
+ * `tailored_cv` sütunu JSON tutar; eski kayıtlar şemaya sonradan eklenen
+ * alanları içermez. Çizici `cv.contact.links` gibi alanları dizi varsaydığı
+ * için eksik alan, gönderim anında "is not iterable" hatasıyla başvuruyu
+ * çökertiyordu. Burada her dizi alanı garanti altına alınır.
+ */
+export function normalizeTailoredCv(cv: TailoredCv): TailoredCv {
+  const list = <T,>(value: T[] | undefined | null): T[] => (Array.isArray(value) ? value : []);
+
+  return {
+    ...cv,
+    contact: { ...cv.contact, fullName: cv.contact?.fullName ?? "", links: list(cv.contact?.links) },
+    headline: cv.headline ?? "",
+    summary: cv.summary ?? "",
+    highlightedSkills: list(cv.highlightedSkills),
+    adjacentSkills: list(cv.adjacentSkills),
+    skillGroups: list(cv.skillGroups).map((group) => ({ ...group, skills: list(group?.skills) })),
+    experience: list(cv.experience).map((entry) => ({ ...entry, bullets: list(entry?.bullets) })),
+    education: list(cv.education),
+    certifications: list(cv.certifications),
+    languages: list(cv.languages),
+    projects: list(cv.projects).map((entry) => ({ ...entry, skills: list(entry?.skills) })),
+    source: cv.source ?? "heuristic"
+  };
+}

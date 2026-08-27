@@ -74,6 +74,15 @@ export async function verifyListing(record: JobListingRecord): Promise<VerifyOut
     return outcome(record.id, "error", `geçici hata HTTP ${response.status}`);
   }
 
+  // Yönlendirme kontrolü: kapanan/silinen ilanlar 404 vermek yerine sık sık
+  // arama sayfasına veya ana sayfaya 302 atar. `redirect: "follow"` bunu
+  // 200 + dolu gövde olarak gösterdiği için ölü ilan "aktif" sayılıyordu ve
+  // kullanıcı "İlanı Aç" deyince sitenin ana sayfasına düşüyordu.
+  if (hasRedirectedAwayFromDetail(record.externalUrl, response.url)) {
+    await markListingExpired(record.id, `ilan sayfası ${response.url} adresine yönlendi`);
+    return outcome(record.id, "expired", "ilan detayı yerine liste/ana sayfaya yönlendirdi");
+  }
+
   let body = "";
   try {
     body = (await response.text()).toLocaleLowerCase("tr-TR");
@@ -95,6 +104,28 @@ export async function verifyListing(record: JobListingRecord): Promise<VerifyOut
 
   await markListingActive(record.id);
   return outcome(record.id, "active", "erişilebilir ve geçerli");
+}
+
+/**
+ * İstek, ilanın kendi detay adresinden başka bir yere mi düştü?
+ *
+ * Sorgu dizesi ve sondaki eğik çizgi yok sayılır; yalnızca yol karşılaştırılır.
+ * Aynı yolda kalan yönlendirmeler (http→https, www ekleme) sorun değildir.
+ */
+export function hasRedirectedAwayFromDetail(originalUrl: string, finalUrl: string | undefined): boolean {
+  if (!finalUrl) {
+    return false;
+  }
+
+  try {
+    const from = new URL(originalUrl);
+    const to = new URL(finalUrl);
+
+    const normalizePath = (value: string) => value.replace(/\/+$/, "").toLowerCase();
+    return normalizePath(from.pathname) !== normalizePath(to.pathname);
+  } catch {
+    return false;
+  }
 }
 
 async function fetchWithTimeout(url: string): Promise<Response> {

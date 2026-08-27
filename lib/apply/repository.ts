@@ -2,6 +2,7 @@ import mysql from "mysql2/promise";
 
 import { getDbPool } from "@/lib/db";
 import { parseJsonField } from "@/lib/job-queue";
+import { normalizeTailoredCv } from "@/lib/cv/types";
 import type { GapItem, KeywordAlignmentItem, TailoredCv } from "@/lib/cv/types";
 import type { ApplicationChannel } from "@/lib/apply/channel";
 
@@ -197,6 +198,46 @@ export async function markApplicationFailed(applicationId: number, message: stri
   await addApplicationEvent(applicationId, "failed", message.slice(0, 500));
 }
 
+/**
+ * Kullanıcının elle girdiği başvuru adresini kaydeder ve başvuruyu e-posta
+ * kanalına geçirir.
+ *
+ * Neden gerekli: Türkiye'nin büyük ilan siteleri (Kariyer.net, Secretcv,
+ * Eleman.net) işveren e-postasını yayınlamıyor — başvuruyu kendi portallarına
+ * zorluyorlar. Ölçüldü: aktif ilanların hiçbirinin metninde e-posta yok.
+ * Ama kullanıcı şirketin İK adresini çoğu zaman biliyor veya şirketin
+ * sitesinden bulabiliyor. Bu fonksiyon o bilgiyi sisteme sokarak otomasyonu
+ * portal-only ilanlarda da kullanılabilir kılar.
+ *
+ * `recipient_source = 'manual'`: pipeline bu kaynaklı adreslere ASLA otomatik
+ * gönderim yapmaz; kullanıcı her seferinde kendi onaylar.
+ */
+export async function setApplicationRecipient(
+  applicationId: number,
+  userId: number,
+  email: string
+): Promise<void> {
+  const pool = getDbPool();
+
+  const [result] = await pool.query<mysql.ResultSetHeader>(
+    `UPDATE job_applications
+     SET recipient_email = ?,
+         recipient_source = 'manual',
+         channel = 'email',
+         status = IF(status = 'sent', status, 'needs_review'),
+         error_message = NULL,
+         updated_at = NOW()
+     WHERE id = ? AND user_id = ?`,
+    [email, applicationId, userId]
+  );
+
+  if (result.affectedRows === 0) {
+    throw new Error("Başvuru bulunamadı.");
+  }
+
+  await addApplicationEvent(applicationId, "recipient_set", `Başvuru adresi elle girildi: ${email}`);
+}
+
 export async function updateApplicationStatus(
   applicationId: number,
   status: ApplicationStatus,
@@ -343,7 +384,7 @@ function mapApplicationRow(row: mysql.RowDataPacket): JobApplication {
     channel: row.channel === "email" ? "email" : "portal",
     recipientEmail: row.recipient_email ?? undefined,
     recipientSource: row.recipient_source ?? undefined,
-    tailoredCv: parseJsonField<TailoredCv | undefined>(row.tailored_cv, undefined),
+    tailoredCv: readTailoredCv(row.tailored_cv),
     coverLetter: row.cover_letter ?? undefined,
     emailSubject: row.email_subject ?? undefined,
     gapReport: parseJsonField<GapItem[]>(row.gap_report, []),
@@ -380,4 +421,28 @@ function toIso(value: unknown): string {
   }
   const date = new Date(String(value));
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+}
+
+/**
+ * Yeniden üretilen CV dosyalarının yollarını günceller.
+ *
+ * Gönderim anında dosyalar diskte bulunamazsa boru hattı bunları saklanan CV
+ * verisinden yeniden üretir; yeni yolların kaybolmaması için buraya yazılır.
+ */
+export async function updateApplicationFilePaths(
+  applicationId: number,
+  userId: number,
+  files: { pdfPath?: string; docxPath?: string }
+): Promise<void> {
+  const pool = getDbPool();
+  await pool.execute(
+    "UPDATE job_applications SET pdf_path = ?, docx_path = ?, updated_at = NOW() WHERE id = ? AND user_id = ?",
+    [files.pdfPath ?? null, files.docxPath ?? null, applicationId, userId]
+  );
+}
+
+/** Saklanan CV JSON'unu okur ve eksik dizi alanlarını tamamlar. */
+function readTailoredCv(raw: unknown): TailoredCv | undefined {
+  const parsed = parseJsonField<TailoredCv | undefined>(raw, undefined);
+  return parsed ? normalizeTailoredCv(parsed) : undefined;
 }

@@ -47,17 +47,25 @@ export async function sendApplicationEmail(
 
   const attachments = await loadAttachments(input.attachments);
 
-  const info: any = await transporter.sendMail({
-    from: { name: fromName, address: fromAddress },
-    to,
-    // Kullanıcı gönderdiği her başvurunun bir kopyasını kendi kutusunda görür.
-    cc: settings.ccSelf ? fromAddress : undefined,
-    replyTo: fromAddress,
-    subject: input.subject,
-    text: input.coverLetter,
-    html: buildHtmlBody(input.coverLetter),
-    attachments
-  });
+  let info: any;
+  try {
+    info = await transporter.sendMail({
+      from: { name: fromName, address: fromAddress },
+      to,
+      // Kullanıcı gönderdiği her başvurunun bir kopyasını kendi kutusunda görür.
+      cc: settings.ccSelf ? fromAddress : undefined,
+      replyTo: fromAddress,
+      subject: input.subject,
+      text: input.coverLetter,
+      html: buildHtmlBody(input.coverLetter),
+      attachments
+    });
+  } catch (error) {
+    // Ham SMTP/DNS hataları ("getaddrinfo ENOTFOUND smtp.example.com") son
+    // kullanıcıya hiçbir şey anlatmıyor; ne olduğunu ve ne yapması gerektiğini
+    // söyleyen bir mesaja çevrilir.
+    throw new Error(describeSmtpError(error, settings));
+  }
 
   if (isDryRun()) {
     console.log(
@@ -67,12 +75,74 @@ export async function sendApplicationEmail(
     );
   }
 
-  return {
-    messageId: String(info.messageId ?? ""),
-    accepted: (info.accepted ?? []).map((item: unknown) =>
-      typeof item === "string" ? item : String((item as { address?: string })?.address ?? "")
-    )
-  };
+  const accepted = toAddressList(info.accepted);
+  const rejected = toAddressList(info.rejected);
+
+  // SMTP bağlantısı başarılı olsa bile sunucu ALICIYI reddetmiş olabilir
+  // (kapalı kutu, yanlış adres). Bu durumda sendMail hata fırlatmaz; sonucu
+  // okumazsak başvuruyu "Gönderildi" diye işaretler ve kullanıcı hiç
+  // ulaşmamış bir başvuruyu yapılmış sanardı.
+  if (!isDryRun() && (rejected.length > 0 || accepted.length === 0)) {
+    throw new Error(
+      `İlandaki başvuru adresi (${rejected[0] ?? to}) e-postayı kabul etmedi. ` +
+        "Adres kapalı veya hatalı olabilir; bu ilana ilan sayfasından başvurabilirsin."
+    );
+  }
+
+  return { messageId: String(info.messageId ?? ""), accepted };
+}
+
+/** nodemailer accepted/rejected alanlarını düz adres listesine çevirir. */
+function toAddressList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => (typeof item === "string" ? item : String((item as { address?: string })?.address ?? "")))
+    .filter(Boolean);
+}
+
+/**
+ * SMTP/ağ hatalarını kullanıcının anlayacağı, ne yapacağını söyleyen Türkçe
+ * mesaja çevirir. Teknik ayrıntı log'da kalır.
+ */
+export function describeSmtpError(error: unknown, settings: ApplicationSettings): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const code = String((error as { code?: string })?.code ?? "");
+  const responseCode = Number((error as { responseCode?: number })?.responseCode ?? 0);
+  const host = settings.smtpHost ?? "SMTP sunucusu";
+
+  console.error("[mailer] Gönderim hatası:", code || responseCode || "", raw);
+
+  // Sunucu adı çözülemedi / erişilemedi
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN" || /getaddrinfo/i.test(raw)) {
+    return `E-posta sunucusuna ulaşılamadı (${host}). Ayarlardaki sunucu adresi hatalı olabilir; "Ayarlar"dan e-posta adresini tekrar kaydet.`;
+  }
+
+  if (code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ESOCKET" || /timeout/i.test(raw)) {
+    return `E-posta sunucusuna bağlanılamadı (${host}). İnternet bağlantını kontrol et; kurumsal ağlar SMTP portlarını kapatabiliyor.`;
+  }
+
+  // Kimlik doğrulama
+  if (code === "EAUTH" || responseCode === 535 || responseCode === 534 || /invalid login|authentication|username and password/i.test(raw)) {
+    const isGmail = /gmail|googlemail/i.test(settings.smtpHost ?? "") || /gmail|googlemail/i.test(settings.senderEmail ?? "");
+    return isGmail
+      ? "E-posta şifresi kabul edilmedi. Gmail normal şifreni kabul etmez: Google hesabında 2 adımlı doğrulamayı açıp 16 haneli 'Uygulama Şifresi' üret ve Ayarlar'dan onu gir."
+      : "E-posta kullanıcı adı veya şifresi kabul edilmedi. Çoğu sağlayıcı normal şifre yerine 'uygulama şifresi' ister; Ayarlar'dan tekrar dene.";
+  }
+
+  // Alıcı reddi
+  if (responseCode === 550 || responseCode === 553 || /recipient|mailbox/i.test(raw)) {
+    return "İlandaki başvuru adresi e-postayı kabul etmedi (adres kapalı veya hatalı olabilir). Bu ilana ilan sayfasından başvurabilirsin.";
+  }
+
+  // Günlük kota
+  if (responseCode === 421 || responseCode === 452 || /quota|rate limit|too many/i.test(raw)) {
+    return "E-posta sağlayıcın günlük gönderim sınırına ulaştı. Yarın tekrar dene veya günlük gönderim tavanını düşür.";
+  }
+
+  return `E-posta gönderilemedi: ${raw.slice(0, 160)}`;
 }
 
 /** SMTP bağlantısını ve kimlik bilgilerini doğrular; e-posta göndermez. */
@@ -84,7 +154,13 @@ export async function verifySmtpConnection(settings: ApplicationSettings): Promi
   }
 
   const transporter = await createTransporter(settings);
-  await transporter.verify();
+
+  try {
+    await transporter.verify();
+  } catch (error) {
+    throw new Error(describeSmtpError(error, settings));
+  }
+
   await markSmtpVerified(settings.userId);
 }
 

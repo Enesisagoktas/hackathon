@@ -178,6 +178,24 @@ export async function markListingStale(id: number, reason?: string): Promise<voi
 
 export async function markListingExpired(id: number, reason?: string): Promise<void> {
   await setStatus(id, "expired", reason);
+
+  // İlan kapandıysa ona ait BEKLEYEN başvuru paketleri de anlamını yitirir.
+  // Eskiden yalnızca ilan 'expired' oluyordu; paket "Elle başvuru" olarak
+  // listede kalmaya devam ediyor ve kullanıcı kapanmış bir ilana zaman
+  // harcıyordu. Gönderilmiş başvurular geçmiş kaydı olarak korunur.
+  const pool = getDbPool();
+  const [result] = await pool.query<mysql.ResultSetHeader>(
+    `UPDATE job_applications
+     SET status = 'skipped',
+         error_message = 'İlan yayından kalktı.',
+         updated_at = NOW()
+     WHERE listing_id = ? AND status IN ('needs_review', 'manual_required', 'queued', 'preparing')`,
+    [id]
+  );
+
+  if (result.affectedRows) {
+    console.log(`[repository] İlan ${id} kapandı; ${result.affectedRows} bekleyen başvuru paketi kapatıldı.`);
+  }
 }
 
 export async function incrementListingError(id: number, reason?: string): Promise<void> {

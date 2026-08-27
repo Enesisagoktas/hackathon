@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSessionUser } from "@/lib/auth/session";
-import { savePrimaryCv } from "@/lib/cv/store";
+import { clearStaleApplications, savePrimaryCv } from "@/lib/cv/store";
 import { extractDocxText } from "@/lib/extract-docx";
 import { extractPdfText } from "@/lib/extract-pdf";
 import { enqueueJobSearch } from "@/lib/job-queue";
@@ -68,6 +68,11 @@ export async function POST(request: Request) {
       fileName: file.name.slice(0, 255)
     });
 
+    // Eski CV'den üretilmiş, henüz gönderilmemiş başvuru paketlerini temizle.
+    // Bunlar eski CV'ye göre yazıldığı için artık geçersiz; ekranda kalırlarsa
+    // kullanıcı yeni CV'nin sonuçlarıyla karıştırıyor.
+    const clearedApplications = await clearStaleApplications(user.id);
+
     const { searchId } = await enqueueJobSearch({
       cvText: text,
       fileType,
@@ -84,6 +89,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       searchId,
       cvId,
+      clearedApplications,
       status: "pending",
       message: "İşlem kuyruğa alındı."
     });

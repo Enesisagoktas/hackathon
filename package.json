@@ -14,7 +14,12 @@
     "seed:jobs": "tsx scripts/import-sample-jobs.ts",
     "make:cv": "tsx scripts/make-sample-cv.ts",
     "test:apply": "tsx scripts/test-apply-pipeline.ts",
-    "test:e2e": "tsx scripts/test-e2e-http.ts"
+    "test:e2e": "tsx scripts/test-e2e-http.ts",
+    "test:relevance": "tsx scripts/test-relevance.ts",
+    "test:crawl": "tsx scripts/test-crawl-guards.ts",
+    "test:search": "tsx scripts/test-search-guards.ts",
+    "test:recipient": "tsx scripts/test-recipient.ts",
+    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

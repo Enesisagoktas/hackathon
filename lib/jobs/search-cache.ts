@@ -22,12 +22,62 @@ export type ScoredListing = {
 export async function searchCachedListings(profile: CandidateProfile): Promise<CrawledJobListing[]> {
   const records = await searchActiveListings(profile);
 
-  const scored: ScoredListing[] = records
+  // Lokasyon GERÇEK bir filtre. Eskiden yalnızca cheapScore'a +15 ekliyordu;
+  // AI skorları bu farkı kolayca bastırdığı için "Ankara" seçen kullanıcıya
+  // İstanbul ilanları gelmeye devam ediyordu.
+  const locationFiltered = filterByLocation(records, profile);
+
+  const scored: ScoredListing[] = locationFiltered
     .map((listing) => ({ listing, cheapScore: cheapScore(listing, profile) }))
     .sort((left, right) => right.cheapScore - left.cheapScore)
     .slice(0, MAX_PREFILTER);
 
   return scored.slice(0, MAX_AI_CANDIDATES).map(({ listing, cheapScore: score }) => toCrawledListing(listing, score, profile));
+}
+
+/**
+ * Seçilen illere göre eler.
+ *
+ * Lokasyonu BİLİNMEYEN ilanlar elenmez: ilan metninde şehir yazmaması onun
+ * yanlış şehirde olduğunu kanıtlamaz, elemek gerçek fırsatları kaybettirir.
+ * Yalnızca açıkça BAŞKA bir şehir yazan ilanlar düşer.
+ *
+ * Uzaktan çalışma seçiliyse lokasyon kısıtı uygulanmaz — remote ilanın şehri
+ * önemsizdir.
+ */
+export function filterByLocation(records: JobListingRecord[], profile: CandidateProfile): JobListingRecord[] {
+  if (profile.locationMode !== "cities" || !profile.locations.length || profile.workMode === "remote") {
+    return records;
+  }
+
+  const wanted = profile.locations.map(normalizeComparable).filter(Boolean);
+
+  if (!wanted.length) {
+    return records;
+  }
+
+  const kept = records.filter((listing) => {
+    const location = normalizeComparable(listing.location ?? "");
+
+    // Lokasyon bilinmiyor → şüpheden yararlansın.
+    if (!location) {
+      return true;
+    }
+
+    // "istanbul(avrupa)", "kocaeli, gebze" gibi biçimler alt dize eşleşir.
+    if (wanted.some((city) => location.includes(city))) {
+      return true;
+    }
+
+    // Uzaktan çalışılabilen ilan, şehri farklı olsa da elenmez.
+    return listing.workMode === "remote";
+  });
+
+  console.log(
+    `[search-cache] Lokasyon filtresi (${profile.locations.join(", ")}): ${records.length} → ${kept.length} ilan`
+  );
+
+  return kept;
 }
 
 /**

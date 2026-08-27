@@ -17,6 +17,7 @@ import {
   truncateText,
   uniq
 } from "@/lib/jobs/normalize";
+import { filterListingsByProfile } from "@/lib/jobs/relevance";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 CVMatchBot/1.0";
@@ -69,9 +70,13 @@ const JOB_ADAPTERS: JobAdapter[] = [
     platform: "Kariyer.net",
     category: "general",
     selectors: KARIYER_SELECTORS,
+    // Ölçüm (canlı): `?k=` parametresi sunucuda düşüyor ve `/is-ilanlari?fpi=1`
+    // genel sayfasına yönlendiriyor; doğru parametre `kw`. Slug yolu ise yalnızca
+    // Türkçe karşılığı varsa çalışıyor ("yazilim-gelistirici" → 146 eşleşme,
+    // "frontend-developer" → genel sayfaya yönlendi).
     buildSearchUrls: (query) => [
-      `https://www.kariyer.net/is-ilanlari/${slugify(query)}`,
-      `https://www.kariyer.net/is-ilanlari?fpi=1&k=${encodeURIComponent(query).replace(/%20/g, "+")}`
+      `https://www.kariyer.net/is-ilanlari?kw=${encodeURIComponent(query)}`,
+      `https://www.kariyer.net/is-ilanlari/${slugify(query)}`
     ],
     isDetailUrl: (url) => url.hostname.includes("kariyer.net") && url.pathname.startsWith("/is-ilani/")
   },
@@ -116,9 +121,11 @@ const JOB_ADAPTERS: JobAdapter[] = [
     platform: "Toptalent",
     category: "tech",
     // Fixed: Toptalent uses /is-ilanlari, not /jobs
+    // Genel `/is-ilanlari` sayfası sorguyu tamamen yok sayıyordu ve her aramada
+    // aynı alakasız ilanları cache'e yazıyordu; çıkarıldı.
     buildSearchUrls: (query) => [
-      `https://toptalent.co/is-ilanlari`,
-      `https://toptalent.co/is-ilanlari/${slugify(query)}-is-ilanlari`
+      `https://toptalent.co/is-ilanlari/${slugify(query)}-is-ilanlari`,
+      `https://toptalent.co/is-ilanlari?q=${encodeURIComponent(query)}`
     ],
     // Detail URLs: /company-title-123456 (direct slug with numeric ID)
     isDetailUrl: (url) => {
@@ -206,11 +213,26 @@ function buildCrawlQueries(profile: CandidateProfile) {
     ? profile.titles.slice(1, 3).map((title) => joinQuery([seniorityTerm, title]))
     : [];
 
-  // Combine all queries, deduplicate, limit
-  const allQueries = [...standardQueries, ...seniorityTitleQueries, ...aiQueries, ...titleQueries];
+  // Şehir seçiliyse sorgulara da girsin: aksi halde crawler ülke geneli tarar,
+  // gelen ilanların çoğu lokasyon filtresine takılır ve tarama boşa gider.
+  const cityQueries =
+    profile.locationMode === "cities"
+      ? profile.locations.slice(0, 2).flatMap((city) => [
+          joinQuery([profile.targetRole, city]),
+          joinQuery([seniorityTerm, profile.targetRole, city])
+        ])
+      : [];
 
-  return uniq(allQueries.filter((query) => query.length >= 3))
-    .slice(0, 10); // Increased from 5 to 10 for richer coverage
+  // Combine all queries, deduplicate, limit
+  const allQueries = [
+    ...standardQueries,
+    ...cityQueries,
+    ...seniorityTitleQueries,
+    ...aiQueries,
+    ...titleQueries
+  ];
+
+  return uniq(allQueries.filter((query) => query.length >= 3)).slice(0, 12);
 }
 
 async function crawlAdapter(
@@ -255,20 +277,56 @@ async function crawlAdapter(
         break;
       }
 
-      const html = await fetchPlatformHtml(adapter.platform, searchUrl, deadlineAt).catch((error) => {
+      const page = await fetchPlatformHtml(adapter.platform, searchUrl, deadlineAt).catch((error) => {
         if (error instanceof CrawlDeadlineError) {
           hitDeadline = true;
         }
 
-        return "";
+        return { html: "", finalUrl: searchUrl };
       });
 
-      if (!html) {
+      if (!page.html) {
+        continue;
+      }
+
+      // Site sorguyu karşılayamayıp genel ilan listesine yönlendirdiyse o sayfa
+      // bir arama sonucu değildir; içindeki ilanlar sorguyla ilgisizdir.
+      if (hasFallenBackToGenericListing(searchUrl, page.finalUrl)) {
+        console.log(
+          `[crawler] ${adapter.platform}: "${searchUrl}" genel ilan sayfasına yönlendi (${page.finalUrl}); sonuçları alınmadı.`
+        );
         continue;
       }
 
       const sourceQuery = findSourceQueryForUrl(searchUrl, adapter, queries, profile);
-      discoverListingUrls(html, searchUrl, adapter).forEach((url) => {
+      let listingUrls = discoverListingUrls(page.html, searchUrl, adapter);
+
+      // Sayfa doluysa ama tek bir ilan linki bile yoksa ilanlar JavaScript ile
+      // geliyordur. Eski tetikleyici yalnızca "HTML 500 bayttan küçükse" tarayıcı
+      // açıyordu; ölçümde Secretcv'nin 231 KB'lık JS sayfası bu yüzden hiç
+      // işlenemiyor, platform her aramada 0 ilan döndürüyordu.
+      if (!listingUrls.length && !isDeadlineExceeded(deadlineAt)) {
+        const rendered = await fetchPlatformHtml(adapter.platform, searchUrl, deadlineAt, {
+          forceBrowser: true
+        }).catch((error) => {
+          if (error instanceof CrawlDeadlineError) {
+            hitDeadline = true;
+          }
+
+          return { html: "", finalUrl: searchUrl };
+        });
+
+        if (rendered.html) {
+          listingUrls = discoverListingUrls(rendered.html, searchUrl, adapter);
+          if (listingUrls.length) {
+            console.log(
+              `[crawler] ${adapter.platform}: "${searchUrl}" tarayıcıyla işlendi, ${listingUrls.length} ilan linki bulundu.`
+            );
+          }
+        }
+      }
+
+      listingUrls.forEach((url) => {
         if (!discoveredByUrl.has(url)) {
           discoveredByUrl.set(url, sourceQuery);
         }
@@ -287,23 +345,34 @@ async function crawlAdapter(
           return null;
         }
 
-        const html = await fetchPlatformHtml(adapter.platform, url, deadlineAt).catch((error) => {
+        const detail = await fetchPlatformHtml(adapter.platform, url, deadlineAt).catch((error) => {
           if (error instanceof CrawlDeadlineError) {
             hitDeadline = true;
           }
 
-          return "";
+          return { html: "", finalUrl: url };
         });
 
-        if (!html) {
+        if (!detail.html) {
           return null;
         }
 
-        return parseJobDetail(html, url, adapter, sourceQuery);
+        return parseJobDetail(detail.html, url, adapter, sourceQuery);
       }),
       MAX_CONCURRENT_DETAILS
     );
-    const listings = parsedListings.filter((listing): listing is CrawledJobListing => Boolean(listing));
+    const parsed = parsedListings.filter((listing): listing is CrawledJobListing => Boolean(listing));
+
+    // İlan siteleri, arama hiçbir şey bulamadığında genel ilan listesini döner.
+    // O sayfadaki alakasız ilanlar cache'e yazılırsa bütün kullanıcıları etkiler.
+    const { kept: listings, dropped } = filterListingsByProfile(parsed, profile);
+
+    if (dropped.length) {
+      console.log(
+        `[crawler] ${adapter.platform}: ${dropped.length} ilan profille ilgisiz olduğu için alınmadı (örn. "${dropped[0].title.slice(0, 60)}").`
+      );
+    }
+
     const crawlStatus: PlatformCrawlStatus["status"] = listings.length
       ? hitDeadline
         ? "timeout"
@@ -345,7 +414,12 @@ async function crawlAdapter(
   }
 }
 
-async function fetchPlatformHtml(platform: JobPlatform, url: string, deadlineAt: number) {
+async function fetchPlatformHtml(
+  platform: JobPlatform,
+  url: string,
+  deadlineAt: number,
+  options: { forceBrowser?: boolean } = {}
+) {
   let state = platformRequestQueues.get(platform);
 
   if (!state) {
@@ -372,18 +446,22 @@ async function fetchPlatformHtml(platform: JobPlatform, url: string, deadlineAt:
 
     assertWithinDeadline(deadlineAt);
     state.lastRequestAt = Date.now();
-    return withTimeout(fetchHtml(url), FETCH_HARD_TIMEOUT_MS, `Crawler isteği zaman aşımına uğradı: ${url}`);
+    return withTimeout(fetchHtml(url, options), FETCH_HARD_TIMEOUT_MS, `Crawler isteği zaman aşımına uğradı: ${url}`);
   });
 
   state.queue = request.then(() => undefined, () => undefined);
   return request;
 }
 
-async function fetchHtml(url: string) {
-  const regularHtml = await fetchHtmlRegular(url).catch(() => "");
+export type FetchedPage = { html: string; finalUrl: string };
 
-  if (regularHtml && regularHtml.length > 500) {
-    return regularHtml;
+async function fetchHtml(url: string, options: { forceBrowser?: boolean } = {}): Promise<FetchedPage> {
+  const regular = options.forceBrowser
+    ? { html: "", finalUrl: url }
+    : await fetchHtmlRegular(url).catch(() => ({ html: "", finalUrl: url }));
+
+  if (regular.html && regular.html.length > 500) {
+    return regular;
   }
 
   // Browser fallback handles JS rendering and anti-bot pages, but only after fast fetch fails.
@@ -395,14 +473,16 @@ async function fetchHtml(url: string) {
       const html = await fetchWithBrowser(url, FETCH_TIMEOUT_MS + 5000);
 
       if (html && html.length > 500) {
-        return html;
+        // Tarayıcı yolu son URL'yi bildirmiyor; yönlendirme denetimi için
+        // istenen adres korunur (yanlış pozitif eleme yapmamak için güvenli taraf).
+        return { html, finalUrl: url };
       }
     }
   } catch {
     // Browser not available or failed; return the regular response if it had anything useful.
   }
 
-  return regularHtml;
+  return regular;
 }
 
 async function fetchHtmlRegular(url: string) {
@@ -421,12 +501,53 @@ async function fetchHtmlRegular(url: string) {
     });
 
     if (!response.ok) {
-      return "";
+      return { html: "", finalUrl: response.url || url };
     }
 
-    return response.text();
+    return { html: await response.text(), finalUrl: response.url || url };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+/**
+ * Arama sayfasının, sorguyu karşılayamadığı için sitenin genel ilan listesine
+ * yönlendirilip yönlendirilmediği.
+ *
+ * Ölçüm: `kariyer.net/is-ilanlari/frontend-developer` → 302 → `/is-ilanlari`
+ * (tüm ilanlar). Crawler bunu geçerli bir arama sonucu sanıp sayfadaki garson,
+ * satış temsilcisi vb. ilanları "Frontend Developer" sorgusuyla kaydediyordu.
+ * Böyle bir sayfa hiç işlenmemelidir.
+ */
+export function hasFallenBackToGenericListing(requestedUrl: string, finalUrl: string): boolean {
+  try {
+    const from = new URL(requestedUrl);
+    const to = new URL(finalUrl);
+
+    if (from.host !== to.host) {
+      return true;
+    }
+
+    const normalize = (value: string) => value.replace(/\/+$/, "").toLowerCase();
+    const fromPath = normalize(from.pathname);
+    const toPath = normalize(to.pathname);
+
+    // Yol kısaldıysa arama terimi düşmüş demektir (ör. /is-ilanlari/x → /is-ilanlari).
+    if (toPath !== fromPath && fromPath.startsWith(toPath)) {
+      return true;
+    }
+
+    // Sorgu parametresi düştüyse de arama uygulanmamış demektir
+    // (ör. ?fpi=1&k=frontend+developer → ?fpi=1).
+    for (const [key, value] of Array.from(from.searchParams.entries())) {
+      if (value && !to.searchParams.get(key)) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
   }
 }
 

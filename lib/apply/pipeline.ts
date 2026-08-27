@@ -1,3 +1,4 @@
+import fs from "fs/promises";
 import path from "path";
 
 import { decideApplicationChannel } from "@/lib/apply/channel";
@@ -10,6 +11,7 @@ import {
   markApplicationFailed,
   markApplicationSent,
   saveTailoring,
+  updateApplicationFilePaths,
   updateApplicationStatus,
   type ApplicationStatus,
   type JobApplication
@@ -20,7 +22,7 @@ import { buildFileBaseName } from "@/lib/cv/render-files";
 import { extractStructuredCv } from "@/lib/cv/structured";
 import { updateStructuredCv } from "@/lib/cv/store";
 import { tailorCvForListing } from "@/lib/cv/tailor";
-import type { StructuredCv, TailoringListing } from "@/lib/cv/types";
+import type { StructuredCv, TailoredCv, TailoringListing } from "@/lib/cv/types";
 import type { StoredCv } from "@/lib/cv/store";
 import type { JobSearchResult } from "@/lib/jobs/types";
 
@@ -304,6 +306,13 @@ export async function sendPreparedApplication(
     throw new Error("Bu başvuru zaten gönderildi.");
   }
 
+  // Elle girilen adres ASLA otomatik gönderilmez: adresi kullanıcı tahmin
+  // etmiş olabilir, yanlış kutuya sessizce başvuru gitmesin. Kullanıcının
+  // kendi bastığı "Gönder" (autoApplied=false) serbesttir.
+  if (options.autoApplied && application.recipientSource === "manual") {
+    throw new Error("Elle girilen adreslere otomatik gönderim yapılmaz; bu başvuruyu sen onaylamalısın.");
+  }
+
   if (application.channel !== "email" || !application.recipientEmail) {
     throw new Error(
       "Bu ilanda başvuru e-postası yok. Başvuruyu ilan sayfasından tamamlamanız gerekiyor."
@@ -318,8 +327,20 @@ export async function sendPreparedApplication(
 
   // Prova modunda ağa çıkılmadığı için SMTP sunucusu aranmaz; yine de bir
   // gönderen adresi gerekir ki üretilen mesaj gerçekçi olsun.
+  //
+  // Mesaj kullanıcıya NE YAPACAĞINI söyler: eskiden "SMTP ayarlarınızı
+  // tamamlayın" diyordu ama ekranda "SMTP" diye bir yer yok — kurulum,
+  // otomatik başvuru onay kutusunun içinde açılıyor.
   if (!settings.senderEmail || (!settings.smtpHost && !isDryRun())) {
-    throw new Error("Gönderim için SMTP ayarlarını tamamlamanız gerekiyor.");
+    throw new Error(
+      "Gönderim için önce e-posta hesabını bağlaman gerekiyor: yukarıdaki \"Uygun başvuruları otomatik gönder\" kutusunu işaretle, e-posta adresini ve uygulama şifreni bir kez gir."
+    );
+  }
+
+  if (!settings.hasSmtpPassword && !isDryRun()) {
+    throw new Error(
+      "E-posta şifren kayıtlı değil. \"Uygun başvuruları otomatik gönder\" kutusundan e-posta adresini ve uygulama şifreni gir."
+    );
   }
 
   const sentToday = await countSentToday(userId);
@@ -327,16 +348,12 @@ export async function sendPreparedApplication(
     throw new Error(`Günlük gönderim tavanına ulaşıldı (${settings.dailySendLimit}). Yarın tekrar deneyin.`);
   }
 
-  const files = await getApplicationFilePaths(applicationId, userId);
-  const baseName = buildFileBaseName(application.tailoredCv);
-
-  const attachments = [
-    files?.pdfPath ? { filename: `${baseName}.pdf`, path: files.pdfPath } : null,
-    files?.docxPath ? { filename: `${baseName}.docx`, path: files.docxPath } : null
-  ].filter((item): item is { filename: string; path: string } => item !== null);
+  const attachments = await resolveAttachments(applicationId, userId, application.tailoredCv);
 
   if (!attachments.length) {
-    throw new Error("Uyarlanmış CV dosyası bulunamadı. Başvuruyu yeniden hazırlayın.");
+    throw new Error(
+      "Uyarlanmış CV dosyası üretilemedi. Bu genellikle PDF motorunun çalışmamasından olur; sunucuyu yeniden başlatıp tekrar dene."
+    );
   }
 
   try {
@@ -365,6 +382,58 @@ export async function sendPreparedApplication(
   }
 
   return updated;
+}
+
+/**
+ * Gönderime eklenecek CV dosyalarını hazırlar.
+ *
+ * Veritabanındaki yol, dosyanın diskte durduğunu garanti etmez: geçici klasör
+ * temizlenmiş ya da başvuru başka bir makinede hazırlanmış olabilir. Bu durumda
+ * eskiden gönderim "dosya bulunamadı" diyerek çıkmaza giriyordu — arayüzde
+ * "yeniden hazırla" diye bir düğme olmadığı için kullanıcının yapabileceği bir şey
+ * yoktu. Artık saklanan CV verisinden dosyalar yeniden üretilir.
+ */
+async function resolveAttachments(
+  applicationId: number,
+  userId: number,
+  tailoredCv: TailoredCv
+): Promise<Array<{ filename: string; path: string }>> {
+  const baseName = buildFileBaseName(tailoredCv);
+
+  const toAttachments = (files: { pdfPath?: string; docxPath?: string }) =>
+    [
+      files.pdfPath ? { filename: `${baseName}.pdf`, path: files.pdfPath } : null,
+      files.docxPath ? { filename: `${baseName}.docx`, path: files.docxPath } : null
+    ].filter((item): item is { filename: string; path: string } => item !== null);
+
+  const stored = (await getApplicationFilePaths(applicationId, userId)) ?? {};
+  const existing: Array<{ filename: string; path: string }> = [];
+
+  for (const attachment of toAttachments(stored)) {
+    if (await fileExists(attachment.path)) {
+      existing.push(attachment);
+    }
+  }
+
+  if (existing.length) {
+    return existing;
+  }
+
+  console.warn(`[apply] #${applicationId} için CV dosyaları diskte yok; yeniden üretiliyor.`);
+  const regenerated = await renderTailoredCvFiles(tailoredCv, applicationId);
+  await updateApplicationFilePaths(applicationId, userId, regenerated);
+  await addApplicationEvent(applicationId, "tailored", "CV dosyaları gönderim öncesi yeniden üretildi.");
+
+  return toAttachments(regenerated);
+}
+
+async function fileExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function skipApplication(applicationId: number, userId: number, reason?: string): Promise<void> {

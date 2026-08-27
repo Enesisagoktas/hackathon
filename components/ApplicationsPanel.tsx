@@ -8,6 +8,7 @@ import {
   Clock,
   Download,
   ExternalLink,
+  Copy,
   Loader2,
   Mail,
   RefreshCw,
@@ -227,6 +228,7 @@ export function ApplicationsPanel({ refreshToken }: { refreshToken?: number }) {
             isBusy={busyId === application.id}
             onToggle={() => void toggleDetail(application.id)}
             onAction={(action) => void runAction(application.id, action)}
+            onRefresh={() => void load()}
           />
         ))}
 
@@ -251,7 +253,8 @@ function ApplicationRow({
   isExpanded,
   isBusy,
   onToggle,
-  onAction
+  onAction,
+  onRefresh
 }: {
   application: JobApplication;
   events: ApplicationEvent[];
@@ -259,6 +262,7 @@ function ApplicationRow({
   isBusy: boolean;
   onToggle: () => void;
   onAction: (action: "send" | "skip" | "manual") => void;
+  onRefresh: () => void;
 }) {
   const meta = STATUS_META[application.status];
   const StatusIcon = meta.icon;
@@ -331,7 +335,7 @@ function ApplicationRow({
 
       {isExpanded ? (
         <>
-          <ApplicationDetail application={application} events={events} />
+          <ApplicationDetail application={application} events={events} onChanged={onRefresh} />
 
           <div className="flex flex-wrap gap-2 border-t bg-slate-50/60 px-4 py-3">
             {application.status === "manual_required" ? (
@@ -353,7 +357,15 @@ function ApplicationRow({
   );
 }
 
-function ApplicationDetail({ application, events }: { application: JobApplication; events: ApplicationEvent[] }) {
+function ApplicationDetail({
+  application,
+  events,
+  onChanged
+}: {
+  application: JobApplication;
+  events: ApplicationEvent[];
+  onChanged: () => void;
+}) {
   const cv = application.tailoredCv;
 
   return (
@@ -380,6 +392,10 @@ function ApplicationDetail({ application, events }: { application: JobApplicatio
         </span>
         {application.listingPlatform ? <span>{application.listingPlatform}</span> : null}
       </p>
+
+      {application.channel === "portal" && application.status !== "sent" ? (
+        <PortalApplyBox application={application} onChanged={onChanged} />
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {application.hasPdf ? (
@@ -537,6 +553,126 @@ function ApplicationDetail({ application, events }: { application: JobApplicatio
             ))}
           </ol>
         </section>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Portal-only ilanlar için başvuru kutusu.
+ *
+ * Türk ilan siteleri (Kariyer.net, Secretcv, Eleman.net) işveren e-postasını
+ * YAYINLAMIYOR; ölçüldü: aktif ilanların hiçbirinin metninde e-posta yok.
+ * Bu yüzden başvuruların büyük çoğunluğu "portal" kanalında kalıyor ve otomatik
+ * gönderim devreye giremiyor. Bu kutu o ilanları kullanılabilir kılar:
+ *  - Kullanıcı şirketin İK adresini biliyorsa girer, paket e-postayla gider.
+ *  - Bilmiyorsa ön yazıyı tek tıkla kopyalayıp ilan sayfasındaki forma yapıştırır.
+ */
+function PortalApplyBox({
+  application,
+  onChanged
+}: {
+  application: JobApplication;
+  onChanged: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function saveRecipient() {
+    if (!email.trim()) {
+      setMessage({ tone: "error", text: "Bir e-posta adresi gir." });
+      return;
+    }
+
+    setIsSaving(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch(`/api/applications/${application.id}/recipient`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() })
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message ?? "Adres kaydedilemedi.");
+      }
+
+      setMessage({ tone: "ok", text: data.message });
+      onChanged();
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "Adres kaydedilemedi." });
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function copyCoverLetter() {
+    if (!application.coverLetter) return;
+
+    try {
+      await navigator.clipboard.writeText(application.coverLetter);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setMessage({ tone: "error", text: "Kopyalanamadı; ön yazıyı aşağıdan elle seçebilirsin." });
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-2xl border border-violet-200 bg-violet-50/50 p-4">
+      <p className="text-sm leading-6 text-violet-900">
+        <strong>Bu ilan kendi sitesi üzerinden başvuru istiyor.</strong> İlan sitesi işverenin e-posta adresini
+        yayınlamıyor, o yüzden bu başvuruyu otomatik gönderemiyoruz. İki seçeneğin var:
+      </p>
+
+      <div className="flex flex-wrap gap-2">
+        <a href={application.listingUrl} rel="noreferrer noopener" target="_blank">
+          <Button size="sm" type="button">
+            <ExternalLink className="mr-2 h-4 w-4" />
+            İlanı aç ve başvur
+          </Button>
+        </a>
+        {application.coverLetter ? (
+          <Button size="sm" type="button" variant="outline" onClick={() => void copyCoverLetter()}>
+            {copied ? <CheckCircle2 className="mr-2 h-4 w-4 text-teal-600" /> : <Copy className="mr-2 h-4 w-4" />}
+            {copied ? "Kopyalandı" : "Ön yazıyı kopyala"}
+          </Button>
+        ) : null}
+        {application.hasPdf ? (
+          <a href={`/api/applications/${application.id}/file?format=pdf`}>
+            <Button size="sm" type="button" variant="outline">
+              <Download className="mr-2 h-4 w-4" />
+              CV&apos;yi indir
+            </Button>
+          </a>
+        ) : null}
+      </div>
+
+      <div className="border-t border-violet-200 pt-3">
+        <p className="mb-2 text-sm text-violet-900">
+          Şirketin İK adresini biliyorsan buraya gir; başvuruyu senin adına e-postayla gönderelim.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <input
+            className="min-w-0 flex-1 rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-violet-500"
+            placeholder="ik@sirket.com"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+          <Button size="sm" disabled={isSaving} type="button" onClick={() => void saveRecipient()}>
+            {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Adresi kaydet
+          </Button>
+        </div>
+      </div>
+
+      {message ? (
+        <p className={`text-sm ${message.tone === "ok" ? "text-teal-700" : "text-red-700"}`}>{message.text}</p>
       ) : null}
     </div>
   );

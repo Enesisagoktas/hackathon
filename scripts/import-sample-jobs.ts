@@ -11,7 +11,37 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
  * Seeds the DB cache with realistic demo listings so the app works end-to-end
  * even when the live crawler has never run. Idempotent: re-running upserts.
  */
+/**
+ * UYARI: data/sample-jobs.json içindeki ilanların URL'leri GERÇEK DEĞİLDİR.
+ * Kullanıcı "İlanı Aç" dediğinde bu linkler 404 verir veya sitenin arama
+ * sayfasına yönlenir. Bu yüzden seed yalnızca açıkça istendiğinde çalışır:
+ *
+ *   npm run seed:jobs -- --demo
+ *
+ * Gerçek ilanlar için `npm run crawl:jobs` kullanın.
+ */
+function ensureDemoFlag(): boolean {
+  if (process.argv.includes("--demo") || process.env.ALLOW_SAMPLE_JOBS === "true") {
+    return true;
+  }
+
+  console.error(
+    [
+      "",
+      "[seed:jobs] ATLANDI — örnek ilanların URL'leri gerçek değil ve kullanıcıya ölü link gösterir.",
+      "  Gerçek ilan için:      npm run crawl:jobs",
+      "  Yine de yüklemek için: npm run seed:jobs -- --demo",
+      ""
+    ].join("\n")
+  );
+  return false;
+}
+
 async function run() {
+  if (!ensureDemoFlag()) {
+    return;
+  }
+
   try {
     const dataPath = path.resolve(process.cwd(), "data/sample-jobs.json");
     const raw = await fs.readFile(dataPath, "utf-8");
