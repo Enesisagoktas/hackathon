@@ -583,6 +583,80 @@ function discoverListingUrls(html: string, searchUrl: string, adapter: JobAdapte
   ).slice(0, MAX_DETAILS_PER_PLATFORM * 2);
 }
 
+
+/** İlanı tanımlamayan, her URL'de geçen yol parçaları. */
+const SLUG_BOILERPLATE = new Set([
+  "ilan",
+  "ilani",
+  "ilanlari",
+  "isilani",
+  "jobs",
+  "job",
+  "kariyer",
+  "career",
+  "careers",
+  "view",
+  "detail",
+  "details",
+  "pozisyon",
+  "vacancy"
+]);
+
+/** <meta og:title> ya da <title> içeriğini okur (metin değil, `content` niteliği). */
+function readMetaTitle($: cheerio.CheerioAPI): string | undefined {
+  const og = $('meta[property="og:title"]').attr("content") ?? $('meta[name="title"]').attr("content");
+  const raw = og ?? $("title").first().text();
+  const cleaned = cleanText(raw ?? "");
+
+  if (!cleaned) {
+    return undefined;
+  }
+
+  // "Toptalent.co | Genel Muhasebe Uzmanı - FASDAT" → site adı atılır.
+  const parts = cleaned.split(/\s*[|–—]\s*/).filter((part) => part.trim().length > 2);
+  const withoutSite = parts.length > 1 ? parts.slice(1).join(" - ") : cleaned;
+
+  return withoutSite.trim() || cleaned;
+}
+
+/**
+ * Başlık ile ilan URL'sinin slugları en az bir anlamlı kelimeyi paylaşıyor mu?
+ *
+ * Paylaşmıyorsa başlık büyük ihtimalle sayfadaki BAŞKA bir ilandan alınmıştır.
+ */
+export function titleMatchesUrl(title: string, url: string): boolean {
+  const titleWords = new Set(
+    normalizeComparable(title)
+      .split(" ")
+      .filter((word) => word.length >= 4)
+  );
+
+  if (!titleWords.size) {
+    // Başlıkta ayırt edici kelime yoksa karar verilemez; başlık reddedilmez.
+    return true;
+  }
+
+  let slug = "";
+  try {
+    slug = normalizeComparable(decodeURIComponent(new URL(url).pathname));
+  } catch {
+    return true;
+  }
+
+  // Yol kalıpları ve kimlik numaraları ilanı tanımlamaz; bunlar atılır.
+  // Kalan kelime yoksa URL'den karar çıkmaz ve başlık REDDEDİLMEZ — yanlış
+  // reddetme, gerçek ilanları sessizce düşürür.
+  const slugWords = slug
+    .split(" ")
+    .filter((word) => word.length >= 4 && !SLUG_BOILERPLATE.has(word) && !/^\d+$/.test(word));
+
+  if (!slugWords.length) {
+    return true;
+  }
+
+  return slugWords.some((word) => titleWords.has(word));
+}
+
 function parseJobDetail(html: string, url: string, adapter: JobAdapter, sourceQuery: string): CrawledJobListing | null {
   const jsonLdListing = parseJsonLdListing(html, url, adapter, sourceQuery);
 
@@ -596,17 +670,28 @@ function parseJobDetail(html: string, url: string, adapter: JobAdapter, sourceQu
   // Use platform-specific selectors first, then fall back to generic ones
   const platformSelectors = adapter.selectors;
   
-  const title = cleanupTitle(
+  // Ölçüm: Toptalent detay sayfalarında hiç <h1> yok. Eski kod bu durumda
+  // '[class*="position"]' gibi genel bir seçiciye düşüp sayfadaki ilan
+  // listesinden BAŞKA bir ilanın başlığını alıyordu; veritabanında başlıklar
+  // URL'lerle çaprazlanmış kayıtlar oluştu. Ayrıca 'meta[property="og:title"]'
+  // seçicisi metin okuduğu için hiç çalışmıyordu — başlık `content` niteliğinde.
+  const metaTitle = readMetaTitle($);
+  const selectorTitle = cleanupTitle(
     firstText($, platformSelectors?.title ?? []) ??
     firstText($, [
       "h1",
       '[class*="job-title"]',
       '[class*="JobTitle"]',
-      '[class*="position"]',
-      '[data-test*="title"]',
-      'meta[property="og:title"]'
+      '[data-test*="title"]'
     ])
   );
+
+  // Seçiciden gelen başlık URL ile hiç örtüşmüyorsa yanlış ilanın başlığı alınmış
+  // olabilir; böyle bir durumda sayfanın kendi meta başlığı tercih edilir.
+  const title =
+    selectorTitle && titleMatchesUrl(selectorTitle, url)
+      ? selectorTitle
+      : cleanupTitle(metaTitle) ?? selectorTitle;
 
   const description = extractDescription($, pageText, platformSelectors?.description);
 

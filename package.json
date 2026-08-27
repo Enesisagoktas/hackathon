@@ -22,8 +22,11 @@
     "test:requirements": "tsx scripts/test-requirement-parser.ts",
     "test:eligibility": "tsx scripts/test-eligibility.ts",
     "test:progress": "tsx scripts/test-progress.ts",
+    "test:title": "tsx scripts/test-title-guard.ts",
+    "test:dedupe": "tsx scripts/test-dedupe.ts",
     "audit:eligibility": "tsx scripts/audit-eligibility.ts",
-    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search && npm run test:requirements && npm run test:eligibility && npm run test:progress"
+    "cleanup:listings": "tsx scripts/cleanup-listings.ts",
+    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search && npm run test:requirements && npm run test:eligibility && npm run test:progress && npm run test:title && npm run test:dedupe"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

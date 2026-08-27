@@ -6,6 +6,7 @@ import {
   type LocationMode,
   type WorkMode
 } from "@/lib/search-preferences";
+import { dedupeListings } from "@/lib/jobs/dedupe";
 import { searchCachedListings } from "@/lib/jobs/search-cache";
 import { scoreListingsWithAi } from "@/lib/jobs/score";
 import type {
@@ -237,6 +238,18 @@ export async function searchJobListings(
         results = sortResults(mergeResultsByUrl(results, secondRound.results));
       }
     }
+
+    // §10 — Aynı ilan birden çok platformda bulunabilir; kullanıcı aynı işi
+    // birkaç kez görmemeli ve aynı işe birkaç başvuru paketi hazırlanmamalı.
+    const deduped = dedupeListings(results);
+
+    if (deduped.removed > 0) {
+      console.log(
+        `[search] ${deduped.removed} kopya ilan birleştirildi (${results.length} → ${deduped.unique.length}).`
+      );
+    }
+
+    results = deduped.unique;
 
     if (results.length === 0) {
       return {
