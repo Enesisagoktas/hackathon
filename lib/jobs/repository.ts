@@ -471,3 +471,16 @@ function toIso(value: unknown): string | undefined {
 function logListingNote(id: number, reason: string) {
   console.log(`[repository] listing ${id}: ${reason}`);
 }
+
+/**
+ * Tek bir ilanı id ile okur.
+ *
+ * §23 — Gönderim öncesi son kontrol, başvurunun bağlı olduğu ilanın hâlâ
+ * yayında olup olmadığını sormak zorunda; cache'teki bir ilan hazırlıkla
+ * gönderim arasında kapanmış olabilir.
+ */
+export async function getListingById(id: number): Promise<JobListingRecord | null> {
+  const pool = getDbPool();
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(`${BASE_SELECT} WHERE l.id = ? LIMIT 1`, [id]);
+  return rows[0] ? mapListingRow(rows[0]) : null;
+}

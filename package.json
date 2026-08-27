@@ -19,6 +19,7 @@
     "test:crawl": "tsx scripts/test-crawl-guards.ts",
     "test:search": "tsx scripts/test-search-guards.ts",
     "test:recipient": "tsx scripts/test-recipient.ts",
+    "test:presend": "tsx scripts/test-presend.ts",
     "test:requirements": "tsx scripts/test-requirement-parser.ts",
     "test:eligibility": "tsx scripts/test-eligibility.ts",
     "test:progress": "tsx scripts/test-progress.ts",

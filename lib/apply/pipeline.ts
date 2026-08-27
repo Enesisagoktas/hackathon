@@ -17,6 +17,8 @@ import {
   type JobApplication
 } from "@/lib/apply/repository";
 import { countSentToday, getApplicationSettings, type ApplicationSettings } from "@/lib/apply/settings";
+import { getListingById } from "@/lib/jobs/repository";
+import { verifyListing } from "@/lib/jobs/verifier";
 import { renderTailoredCvFiles } from "@/lib/cv/render-files";
 import { buildFileBaseName } from "@/lib/cv/render-files";
 import { extractStructuredCv } from "@/lib/cv/structured";
@@ -291,6 +293,42 @@ async function logAutoSendSkipReason(
  * Hazırlanmış bir başvuruyu gönderir. Hem otomatik akış hem de kullanıcının
  * "Gönder" tuşu buraya düşer; gönderim öncesi kontroller tek yerde toplanır.
  */
+/**
+ * Başvurunun bağlı olduğu ilan hâlâ açık mı?
+ *
+ * İlan kaydı zaten 'expired' ise ağa çıkılmadan reddedilir. 'active' görünüyorsa
+ * ve son kontrolün üzerinden zaman geçtiyse canlı doğrulama yapılır.
+ *
+ * Ağ hatası gönderimi ENGELLEMEZ: doğrulama yapamamak, ilanın kapandığı
+ * anlamına gelmez ve kullanıcıyı geçici bir sorun yüzünden fırsattan etmemeli.
+ */
+async function assertListingStillOpen(
+  application: JobApplication,
+  applicationId: number
+): Promise<void> {
+  if (!application.listingId) {
+    return;
+  }
+
+  const listing = await getListingById(application.listingId).catch(() => null);
+
+  if (!listing) {
+    return;
+  }
+
+  if (listing.status === "expired") {
+    await updateApplicationStatus(applicationId, "skipped", "İlan yayından kalktığı için gönderilmedi.");
+    throw new Error("Bu ilan yayından kalkmış. Başvuru gönderilmedi.");
+  }
+
+  const outcome = await verifyListing(listing).catch(() => null);
+
+  if (outcome?.decision === "expired") {
+    await updateApplicationStatus(applicationId, "skipped", "İlan yayından kalktığı için gönderilmedi.");
+    throw new Error("Bu ilan artık yayında değil; başvuru gönderilmedi.");
+  }
+}
+
 export async function sendPreparedApplication(
   applicationId: number,
   userId: number,
@@ -347,6 +385,11 @@ export async function sendPreparedApplication(
   if (sentToday >= settings.dailySendLimit) {
     throw new Error(`Günlük gönderim tavanına ulaşıldı (${settings.dailySendLimit}). Yarın tekrar deneyin.`);
   }
+
+  // §23 — Gönderim öncesi son kontrol: paket hazırlandıktan sonra ilan
+  // kapanmış olabilir. Kapanmış bir ilana e-posta göndermek kullanıcının
+  // itibarına zarar verir ve işe yaramaz.
+  await assertListingStillOpen(application, applicationId);
 
   const attachments = await resolveAttachments(applicationId, userId, application.tailoredCv);
 
