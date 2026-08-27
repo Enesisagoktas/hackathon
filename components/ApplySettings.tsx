@@ -49,12 +49,19 @@ const PRESETS: Array<{ label: string; host: string; port: number; secure: boolea
   }
 ];
 
-export function ApplySettings({ onSettingsChange }: { onSettingsChange?: (settings: ApplySettingsData) => void }) {
+export function ApplySettings({
+  onSettingsChange,
+  defaultOpen = false
+}: {
+  onSettingsChange?: (settings: ApplySettingsData) => void;
+  /** Kullanıcı ayarları bilerek açtıysa doğrudan düzenleme modunda gelsin. */
+  defaultOpen?: boolean;
+}) {
   const [settings, setSettings] = useState<ApplySettingsData | null>(null);
   const [appSecretConfigured, setAppSecretConfigured] = useState(true);
   const [aiConfigured, setAiConfigured] = useState(true);
   const [smtpPassword, setSmtpPassword] = useState("");
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);

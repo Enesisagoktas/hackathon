@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Loader2, LogOut, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Loader2, LogOut, Settings2, ShieldCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +15,8 @@ export type RegisteredUser = {
 
 type AccountConsentProps = {
   onUserChange: (user: RegisteredUser | null) => void;
+  /** Verilirse giriş sonrası şeritte "Ayarlar" tuşu görünür. */
+  onOpenSettings?: () => void;
 };
 
 type Mode = "register" | "login";
@@ -27,7 +29,7 @@ type Mode = "register" | "login";
  * e-posta gönderdiği ve CV'sini sakladığı için "bu kim" sorusunun doğrulanabilir
  * bir cevabı olmak zorunda.
  */
-export function AccountConsent({ onUserChange }: AccountConsentProps) {
+export function AccountConsent({ onUserChange, onOpenSettings }: AccountConsentProps) {
   const [user, setUser] = useState<RegisteredUser | null>(null);
   const [mode, setMode] = useState<Mode>("register");
   const [fullName, setFullName] = useState("");
@@ -120,37 +122,38 @@ export function AccountConsent({ onUserChange }: AccountConsentProps) {
 
   if (isLoadingSession) {
     return (
-      <Card className="border-slate-200 bg-white/90 shadow-sm">
-        <CardContent className="flex items-center gap-3 py-6 text-sm text-slate-500">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Oturum kontrol ediliyor...
-        </CardContent>
-      </Card>
+      <div className="flex items-center gap-2 py-2 text-sm text-slate-500">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Oturum kontrol ediliyor...
+      </div>
     );
   }
 
+  // Giriş yapıldıktan sonra hesap bilgisi tek satırlık ince bir şerit olur.
+  // Eskiden burada koca bir kart duruyordu; oysa oturum açıkken kullanıcının
+  // görmesi gereken tek şey kim olarak giriş yaptığı ve çıkış tuşu.
   if (user) {
     return (
-      <Card className="border-teal-100 bg-white/90 shadow-sm">
-        <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <CheckCircle2 className="h-5 w-5 text-teal-600" />
-                {user.fullName}
-              </CardTitle>
-              <CardDescription className="mt-2">
-                {user.email} hesabıyla devam ediliyor. CV&apos;niz bu hesaba bağlı olarak saklanır ve başvurularınız
-                bu kimlikle takip edilir.
-              </CardDescription>
-            </div>
-            <Button type="button" variant="outline" onClick={handleLogout}>
-              <LogOut className="mr-2 h-4 w-4" />
-              Çıkış
+      <div className="flex items-center justify-between gap-3 rounded-xl border bg-white/80 px-3 py-2 text-sm">
+        <span className="flex min-w-0 items-center gap-2">
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-teal-600" />
+          <span className="truncate font-medium text-slate-900">{user.fullName}</span>
+          <span className="hidden truncate text-slate-500 sm:inline">{user.email}</span>
+        </span>
+
+        <span className="flex shrink-0 items-center gap-1">
+          {onOpenSettings ? (
+            <Button size="sm" type="button" variant="ghost" onClick={onOpenSettings}>
+              <Settings2 className="mr-1.5 h-4 w-4" />
+              Ayarlar
             </Button>
-          </div>
-        </CardHeader>
-      </Card>
+          ) : null}
+          <Button size="sm" type="button" variant="ghost" onClick={handleLogout}>
+            <LogOut className="mr-1.5 h-4 w-4" />
+            Çıkış
+          </Button>
+        </span>
+      </div>
     );
   }
 

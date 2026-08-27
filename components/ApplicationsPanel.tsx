@@ -8,7 +8,6 @@ import {
   Clock,
   Download,
   ExternalLink,
-  FileText,
   Loader2,
   Mail,
   RefreshCw,
@@ -74,6 +73,9 @@ const STATUS_META: Record<ApplicationStatus, { label: string; className: string;
   failed: { label: "Hata", className: "border-red-200 bg-red-50 text-red-700", icon: XCircle }
 };
 
+/** Listede bir seferde gösterilecek başvuru sayısı. */
+const PAGE_SIZE = 5;
+
 export function ApplicationsPanel({ refreshToken }: { refreshToken?: number }) {
   const [applications, setApplications] = useState<JobApplication[]>([]);
   const [stats, setStats] = useState<Record<string, number>>({});
@@ -81,6 +83,7 @@ export function ApplicationsPanel({ refreshToken }: { refreshToken?: number }) {
   const [events, setEvents] = useState<ApplicationEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -213,7 +216,9 @@ export function ApplicationsPanel({ refreshToken }: { refreshToken?: number }) {
           </div>
         ) : null}
 
-        {applications.map((application) => (
+        {/* Liste sıralı geldiği için ilk sıradakiler eylem bekleyenler.
+            Hepsini birden basmak sayfayı gereksiz uzatıyordu. */}
+        {applications.slice(0, visibleCount).map((application) => (
           <ApplicationRow
             key={application.id}
             application={application}
@@ -224,6 +229,17 @@ export function ApplicationsPanel({ refreshToken }: { refreshToken?: number }) {
             onAction={(action) => void runAction(application.id, action)}
           />
         ))}
+
+        {applications.length > visibleCount ? (
+          <Button
+            className="w-full"
+            type="button"
+            variant="ghost"
+            onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}
+          >
+            {applications.length - visibleCount} başvuru daha göster
+          </Button>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -252,6 +268,9 @@ function ApplicationRow({
     <div className="rounded-3xl border bg-white shadow-sm">
       <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
+          {/* Kapalı satırda yalnızca durum ve skor. Uyarlamanın AI mı kural
+              tabanlı mı olduğu, alıcı adres ve eksikler detayda duruyor;
+              listede her satıra dört rozet koymak listeyi okunmaz yapıyordu. */}
           <div className="flex flex-wrap items-center gap-2">
             <Badge className={meta.className} variant="outline">
               <StatusIcon className={`mr-1 h-3 w-3 ${application.status === "preparing" ? "animate-spin" : ""}`} />
@@ -262,34 +281,21 @@ function ApplicationRow({
             </Badge>
             {application.autoApplied ? (
               <Badge className="border-teal-200 bg-teal-50 text-teal-700" variant="outline">
-                Otomatik gönderildi
+                Otomatik
               </Badge>
             ) : null}
-            {application.tailoringSource === "heuristic" ? (
-              <Badge className="border-slate-200 bg-slate-50 text-slate-500" variant="outline">
-                Kural tabanlı uyarlama
+            {criticalGaps.length ? (
+              <Badge className="border-amber-200 bg-amber-50 text-amber-800" variant="outline">
+                <AlertTriangle className="mr-1 h-3 w-3" />
+                {criticalGaps.length} eksik
               </Badge>
-            ) : (
-              <Badge className="border-sky-200 bg-sky-50 text-sky-700" variant="outline">
-                <Sparkles className="mr-1 h-3 w-3" />
-                AI uyarlama
-              </Badge>
-            )}
+            ) : null}
           </div>
 
           <p className="mt-2 truncate font-semibold text-slate-950">{application.listingTitle}</p>
-          <p className="text-sm text-slate-500">
-            {[application.listingCompany, application.listingLocation, application.listingPlatform]
-              .filter(Boolean)
-              .join(" · ")}
+          <p className="truncate text-sm text-slate-500">
+            {[application.listingCompany, application.listingLocation].filter(Boolean).join(" · ")}
           </p>
-
-          {application.channel === "email" && application.recipientEmail ? (
-            <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-600">
-              <Mail className="h-3.5 w-3.5" />
-              {application.recipientEmail}
-            </p>
-          ) : null}
 
           {application.errorMessage ? (
             <p className="mt-2 rounded-xl border border-red-200 bg-red-50 p-2 text-sm text-red-700">
@@ -298,12 +304,9 @@ function ApplicationRow({
           ) : null}
         </div>
 
-        <div className="flex shrink-0 flex-wrap gap-2">
-          <Button size="sm" type="button" variant="outline" onClick={onToggle}>
-            <FileText className="mr-2 h-4 w-4" />
-            {isExpanded ? "Gizle" : "CV'yi Gör"}
-          </Button>
-
+        {/* Satır başına TEK birincil eylem + detay tuşu. "Atla" gibi ikincil
+            eylemler detay açıldığında görünür. */}
+        <div className="flex shrink-0 items-start gap-2">
           {application.status === "needs_review" && application.channel === "email" ? (
             <Button size="sm" disabled={isBusy} type="button" onClick={() => onAction("send")}>
               {isBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
@@ -312,37 +315,39 @@ function ApplicationRow({
           ) : null}
 
           {application.status === "manual_required" ? (
-            <>
-              <a href={application.listingUrl} rel="noreferrer noopener" target="_blank">
-                <Button size="sm" type="button">
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                  İlanı Aç
-                </Button>
-              </a>
-              <Button size="sm" disabled={isBusy} type="button" variant="outline" onClick={() => onAction("manual")}>
-                Başvurdum
+            <a href={application.listingUrl} rel="noreferrer noopener" target="_blank">
+              <Button size="sm" type="button">
+                <ExternalLink className="mr-2 h-4 w-4" />
+                İlanı Aç
               </Button>
-            </>
+            </a>
           ) : null}
 
-          {application.status !== "sent" && application.status !== "skipped" ? (
-            <Button size="sm" disabled={isBusy} type="button" variant="ghost" onClick={() => onAction("skip")}>
-              <SkipForward className="mr-2 h-4 w-4" />
-              Atla
-            </Button>
-          ) : null}
+          <Button size="sm" type="button" variant="ghost" onClick={onToggle}>
+            {isExpanded ? "Gizle" : "Detay"}
+          </Button>
         </div>
       </div>
 
-      {criticalGaps.length && !isExpanded ? (
-        <div className="border-t bg-amber-50/60 px-4 py-2.5 text-sm text-amber-800">
-          <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-          {criticalGaps.length} kritik eksik: {criticalGaps.slice(0, 3).map((gap) => gap.requirement).join(", ")}
-        </div>
-      ) : null}
-
       {isExpanded ? (
-        <ApplicationDetail application={application} events={events} />
+        <>
+          <ApplicationDetail application={application} events={events} />
+
+          <div className="flex flex-wrap gap-2 border-t bg-slate-50/60 px-4 py-3">
+            {application.status === "manual_required" ? (
+              <Button size="sm" disabled={isBusy} type="button" variant="outline" onClick={() => onAction("manual")}>
+                Bu ilana başvurdum
+              </Button>
+            ) : null}
+
+            {application.status !== "sent" && application.status !== "skipped" ? (
+              <Button size="sm" disabled={isBusy} type="button" variant="ghost" onClick={() => onAction("skip")}>
+                <SkipForward className="mr-2 h-4 w-4" />
+                Atla
+              </Button>
+            ) : null}
+          </div>
+        </>
       ) : null}
     </div>
   );
@@ -353,6 +358,29 @@ function ApplicationDetail({ application, events }: { application: JobApplicatio
 
   return (
     <div className="space-y-5 border-t bg-slate-50/60 p-4">
+      {/* Kapalı satırdan kaldırılan künye bilgileri burada duruyor. */}
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600">
+        {application.channel === "email" && application.recipientEmail ? (
+          <span className="flex items-center gap-1.5">
+            <Mail className="h-3.5 w-3.5" />
+            {application.recipientEmail}
+          </span>
+        ) : (
+          <span>İlanda başvuru e-postası yok</span>
+        )}
+        <span className="flex items-center gap-1.5">
+          {application.tailoringSource === "ai" ? (
+            <>
+              <Sparkles className="h-3.5 w-3.5 text-sky-600" />
+              AI ile uyarlandı
+            </>
+          ) : (
+            "Kural tabanlı uyarlandı"
+          )}
+        </span>
+        {application.listingPlatform ? <span>{application.listingPlatform}</span> : null}
+      </p>
+
       <div className="flex flex-wrap gap-2">
         {application.hasPdf ? (
           <a href={`/api/applications/${application.id}/file?format=pdf`}>

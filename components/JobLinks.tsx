@@ -46,17 +46,24 @@ const CONFIDENCE_LABELS: Record<JobSearchResult["confidence"], string> = {
 
 export function JobLinks({ results, fallbackResults = [], summary, isLoading = false }: JobLinksProps) {
   if (!results.length) {
+    // Söyleyecek bir şey yokken kutu çizme. Eskiden burada "sonuçlar burada
+    // görünecek" yazan boş bir kart vardı ve daha ilk açılışta ekranı
+    // gereksiz yere kalabalıklaştırıyordu.
+    if (!isLoading && !fallbackResults.length) {
+      return null;
+    }
+
     return (
       <Card className="bg-white/85">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             {isLoading ? <Loader2 className="h-4 w-4 animate-spin text-teal-700" /> : <SearchCheck className="h-4 w-4 text-teal-700" />}
-            CV&apos;ye Uygun Gerçek İlanlar
+            Eşleşen ilanlar
           </CardTitle>
           <CardDescription>
             {isLoading
-              ? "Platformlar taranıyor, ilan detayları okunuyor ve CV uyumu hesaplanıyor."
-              : summary?.sourceNote ?? "CV analizi tamamlandıktan sonra gerçek ilan detay linkleri burada görünecek."}
+              ? "İlanlar CV'nize göre değerlendiriliyor."
+              : summary?.sourceNote ?? "Uygun ilan bulunamadı."}
           </CardDescription>
         </CardHeader>
         {fallbackResults.length ? (
