@@ -245,8 +245,6 @@ async function processClaimedJob(job: JobSearchQueueRow) {
       (searchNote ? " | not var" : "")
   );
   await pool.query("UPDATE job_searches SET progress = GREATEST(progress, 55), updated_at = NOW() WHERE id = ?", [job.id]);
-  await reportStage(job.id, "plan", "done", `${selectedPositions.length} pozisyon için arama planı hazır`);
-  await reportStage(job.id, "primary-search", "running", "Kaynaklar taranıyor");
 
   const searchPayload = await runWithJobHeartbeat(
     job.id,
@@ -270,15 +268,18 @@ async function processClaimedJob(job: JobSearchQueueRow) {
       },
       // Canlı tarama yalnızca worker akışında açılır; cache yetersizse
       // platformlardan güncel ilan çekilir (kullanıcı 5 dk'ya razı).
-      { allowLiveCrawl: process.env.LIVE_CRAWL_ENABLED !== "false" }
+      {
+        allowLiveCrawl: process.env.LIVE_CRAWL_ENABLED !== "false",
+        // §7 — Aşamalar aramannın kendisinden bildirilir; worker'ın tahmin
+        // yürütmesi hem yanlış hem de kullanıcıyı yanıltıcı olurdu.
+        onStage: (key, status, detail, counters) => reportStage(job.id, key, status, detail, counters)
+      }
     ),
     SEARCH_TIMEOUT_MS
   );
 
   const scoredResults = searchPayload.results.filter((result) => result.kind === "job");
 
-  await reportStage(job.id, "alternative-search", "done", "Alternatif pozisyonlar ve anahtar kelimeler tarandı");
-  await reportStage(job.id, "boutique-search", "done", "Butik ve şirket kaynakları tarandı");
   await reportStage(job.id, "verify", "running", "İlan sayfaları açılıp doğrulanıyor", {
     found: scoredResults.length
   });
@@ -290,12 +291,15 @@ async function processClaimedJob(job: JobSearchQueueRow) {
 
   const finalResults = alive;
 
-  await reportStage(job.id, "verify", "done", `${alive.length} ilan doğrulandı`, {
-    verified: alive.length,
-    eliminated: closedCount
-  });
-  await reportStage(job.id, "match", "done", "Uygunluk ve teknik analiz tamamlandı");
-  await reportStage(job.id, "rank", "done", `${finalResults.length} uygun ilan sıralandı`, {
+  await reportStage(
+    job.id,
+    "verify",
+    "done",
+    `${alive.length} ilan doğrulandı${closedCount ? `, ${closedCount} ilan yayından kalkmış` : ""}`,
+    { verified: alive.length },
+    closedCount
+  );
+  await reportStage(job.id, "rank", "done", `${finalResults.length} uygun ilan hazır`, {
     eligible: finalResults.length
   });
 
@@ -359,7 +363,15 @@ async function reportStage(
   key: StageKey,
   status: StageStatus,
   detail?: string,
-  counters?: Partial<SearchCounters>
+  counters?: Partial<SearchCounters>,
+  /**
+   * "Elenen" sayacına EKLENİR (üzerine yazılmaz).
+   *
+   * Eleme birden çok aşamada olur: alaka/uygunluk analizinde ve yayından
+   * kalkmış ilanların doğrulanmasında. Doğrulama aşaması kendi sayısını
+   * yazdığında önceki eleme kaybı oluyordu (51 → 0).
+   */
+  addEliminated?: number
 ): Promise<void> {
   try {
     const pool = getDbPool();
@@ -370,7 +382,13 @@ async function reportStage(
 
     const now = new Date().toISOString();
     const current = parseProgress(rows[0]?.progress_stages, now) ?? createProgress(now);
-    const next = applyStageUpdate(current, { key, status, detail }, now, counters);
+    const merged: Partial<SearchCounters> = { ...counters };
+
+    if (addEliminated) {
+      merged.eliminated = current.counters.eliminated + addEliminated;
+    }
+
+    const next = applyStageUpdate(current, { key, status, detail }, now, merged);
 
     await pool.query(
       `UPDATE job_searches

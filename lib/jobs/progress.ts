@@ -54,13 +54,21 @@ const STAGE_LABELS: Record<StageKey, string> = {
   rank: "Son sıralama"
 };
 
+/**
+ * Sıra, GERÇEK yürütme sırasıdır.
+ *
+ * Doğrulama, uygunluk analizinden sonra çalışır: analiz aramanın içinde,
+ * doğrulama ise worker'da başvuru üretiminden hemen önce yapılır. Liste
+ * mantıksal olarak "önce doğrula" gibi dizilirse arayüzde sonraki aşamalar
+ * öncekilerden erken tamamlanmış görünür.
+ */
 export const STAGE_ORDER: StageKey[] = [
   "plan",
   "primary-search",
   "alternative-search",
   "boutique-search",
-  "verify",
   "match",
+  "verify",
   "rank"
 ];
 
@@ -121,8 +129,8 @@ export function progressPercent(progress: SearchProgress): number {
     "primary-search": 22,
     "alternative-search": 15,
     "boutique-search": 12,
-    verify: 18,
     match: 17,
+    verify: 18,
     rank: 8
   };
 

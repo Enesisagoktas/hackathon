@@ -163,6 +163,18 @@ export type SearchJobListingsOptions = {
    * tarama çalıştırmak zaman aşımına yol açar.
    */
   allowLiveCrawl?: boolean;
+  /**
+   * §7/§22 — Arama aşama aşama ilerlediğini bildirir.
+   *
+   * Worker bunu veritabanına yazıp arayüze taşır. Çağrı hata verirse arama
+   * durmaz: ilerleme bildirimi bir kolaylıktır, işin kendisi değildir.
+   */
+  onStage?: (
+    key: "plan" | "primary-search" | "alternative-search" | "boutique-search" | "verify" | "match" | "rank",
+    status: "running" | "done" | "skipped",
+    detail?: string,
+    counters?: { found?: number; verified?: number; eliminated?: number; eligible?: number }
+  ) => void | Promise<void>;
 };
 
 // AI skorlaması bu sayının altında ALAKALI ilan bulursa canlı tarama devreye girer.
@@ -206,8 +218,20 @@ export async function searchJobListings(
     sourceNote: ""
   };
 
+  // Aşama bildirimi aramayı asla düşürmemeli.
+  const stage: NonNullable<SearchJobListingsOptions["onStage"]> = async (key, status, detail, counters) => {
+    try {
+      await options.onStage?.(key, status, detail, counters);
+    } catch (error) {
+      console.warn("[search] Aşama bildirimi başarısız:", error instanceof Error ? error.message : error);
+    }
+  };
+
   try {
+    await stage("plan", "done", `"${profile.targetRole}" için arama planı hazır`);
+
     // 1. Tur: cache'teki adaylar AI ile skorlanır.
+    await stage("primary-search", "running", "Veritabanı cache'i taranıyor");
     const candidates = await searchCachedListings(profile);
     const firstRound = candidates.length
       ? await scoreListingsWithAi(candidates, profile)
@@ -217,6 +241,13 @@ export async function searchJobListings(
     let liveCrawlNote = "";
     let totalCandidates = candidates.length;
 
+    await stage(
+      "primary-search",
+      "done",
+      `${candidates.length} aday değerlendirildi, ${results.length} uygun ilan bulundu`,
+      { found: candidates.length, eligible: results.length }
+    );
+
     // 2. Tur: ALAKALI sonuç azsa canlı tarama.
     //
     // Tetik bilinçli olarak aday sayısına değil SONUÇ sayısına bakar: cache,
@@ -224,7 +255,9 @@ export async function searchJobListings(
     // bunların hepsini eler ve elde 0 ilan kalır. Ölçülen gerçek ihtiyaç
     // "kaç aday bulundu" değil "kaç uygun ilan çıktı"dır.
     if (options.allowLiveCrawl && results.length < LIVE_CRAWL_MIN_RESULTS) {
+      await stage("alternative-search", "running", "Platformlarda canlı tarama yapılıyor");
       liveCrawlNote = await runLiveCrawl(profile);
+      await stage("alternative-search", "done", liveCrawlNote.trim() || "Canlı tarama tamamlandı");
 
       // Tekrar skorlanmayacaklar YALNIZCA AI'nın fiilen karar verdikleridir.
       // Burada tüm 1. tur adaylarını elemek hatalı olur: batch'i çöktüğü için
@@ -234,13 +267,26 @@ export async function searchJobListings(
       totalCandidates = candidates.length + pending.filter((candidate) => !candidates.some((c) => c.url === candidate.url)).length;
 
       if (pending.length) {
+        await stage("boutique-search", "running", `${pending.length} yeni ilan değerlendiriliyor`);
         const secondRound = await scoreListingsWithAi(pending, profile);
         results = sortResults(mergeResultsByUrl(results, secondRound.results));
+        await stage("boutique-search", "done", `${secondRound.results.length} uygun ilan eklendi`, {
+          found: totalCandidates,
+          eligible: results.length
+        });
+      } else {
+        await stage("boutique-search", "skipped", "Yeni ilan bulunamadı");
       }
+    } else {
+      await stage("alternative-search", "skipped", "Cache yeterli ilan verdi");
+      await stage("boutique-search", "skipped", "Canlı taramaya gerek kalmadı");
     }
+
+    await stage("match", "running", "Uygunluk ve teknik analiz");
 
     // §10 — Aynı ilan birden çok platformda bulunabilir; kullanıcı aynı işi
     // birkaç kez görmemeli ve aynı işe birkaç başvuru paketi hazırlanmamalı.
+    const beforeDedupe = results.length;
     const deduped = dedupeListings(results);
 
     if (deduped.removed > 0) {
@@ -250,6 +296,11 @@ export async function searchJobListings(
     }
 
     results = deduped.unique;
+
+    await stage("match", "done", `${results.length} ilan uygunluk analizinden geçti${deduped.removed ? `, ${deduped.removed} kopya birleştirildi` : ""}`, {
+      eliminated: Math.max(0, totalCandidates - results.length),
+      eligible: results.length
+    });
 
     if (results.length === 0) {
       return {
