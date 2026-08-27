@@ -16,7 +16,9 @@ export async function generateJsonWithGemini<T>(
   }
 
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  // Anahtar URL'de değil x-goog-api-key başlığında taşınır: URL'ler proxy ve
+  // sunucu loglarına düştüğü için anahtarı sorgu parametresinde taşımak sızdırır.
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   const timeoutMs = options.timeoutMs ?? Number(process.env.GEMINI_TIMEOUT_MS ?? 20000);
   const maxAttempts = options.maxAttempts ?? Number(process.env.GEMINI_MAX_ATTEMPTS ?? 2);
 
@@ -36,7 +38,7 @@ export async function generateJsonWithGemini<T>(
     }
   };
 
-  const data = await fetchGeminiJson(url, requestBody, timeoutMs, maxAttempts);
+  const data = await fetchGeminiJson(url, apiKey, requestBody, timeoutMs, maxAttempts);
   const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
   if (typeof content !== "string") {
@@ -56,6 +58,7 @@ let lastGeminiRequestAt = 0;
 
 async function fetchGeminiJson(
   url: string,
+  apiKey: string,
   requestBody: Record<string, unknown>,
   timeoutMs: number,
   maxAttempts: number
@@ -72,7 +75,8 @@ async function fetchGeminiJson(
       const response = await fetch(url, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey
         },
         body: JSON.stringify(requestBody),
         signal: controller.signal
