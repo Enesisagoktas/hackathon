@@ -12,18 +12,22 @@
     "crawl:jobs": "tsx scripts/crawl-jobs.ts",
     "verify:jobs": "tsx scripts/verify-jobs.ts",
     "seed:jobs": "tsx scripts/import-sample-jobs.ts",
-    "make:cv": "tsx scripts/make-sample-cv.ts"
+    "make:cv": "tsx scripts/make-sample-cv.ts",
+    "test:apply": "tsx scripts/test-apply-pipeline.ts",
+    "test:e2e": "tsx scripts/test-e2e-http.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cheerio": "^1.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "docx": "^9.7.1",
     "dotenv": "^17.4.2",
     "lucide-react": "^0.468.0",
     "mammoth": "^1.8.0",
     "mysql2": "^3.11.5",
     "next": "^14.2.35",
+    "nodemailer": "^9.0.5",
     "pdf-parse": "^1.1.1",
     "puppeteer": "^25.0.2",
     "react": "^18.3.1",
@@ -34,6 +38,7 @@
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.10.2",
+    "@types/nodemailer": "^8.0.1",
     "@types/pdf-parse": "^1.1.5",
     "@types/react": "^18.3.16",
     "@types/react-dom": "^18.3.5",

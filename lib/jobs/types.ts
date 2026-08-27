@@ -118,6 +118,12 @@ export type JobSearchResult = {
   matchedKeywords?: string[];
   /** Detailed criteria match breakdown (AI-powered) */
   criteriaMatch?: CriteriaMatchResult;
+  /** job_listings.id — başvuru kaydını gerçek ilana bağlar. */
+  listingId?: number;
+  /** İlanın "aranan nitelikler" satırları; CV uyarlaması bunları kullanır. */
+  requirements?: string[];
+  /** İlanın "aday kriterleri" satırları. */
+  candidateCriteria?: string[];
 };
 
 export type PlatformCrawlStatus = {

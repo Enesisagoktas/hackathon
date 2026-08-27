@@ -1,9 +1,12 @@
+import { prepareApplicationsForResults, type PrepareApplicationsSummary } from "@/lib/apply/pipeline";
 import { evaluateCv, type CvEvaluation } from "@/lib/cv-evaluation";
+import { getCvById, getPrimaryCv, savePrimaryCv } from "@/lib/cv/store";
 import { getDbPool } from "@/lib/db";
 import { extractProfileFromCv, type AiExtractedProfile } from "@/lib/extract-keywords";
 import { ensureJobQueueSchema, parseJsonField, type JobSearchQueueRow, type QueuedFileType } from "@/lib/job-queue";
 import { searchJobListings } from "@/lib/job-search";
 import { normalizeCities, normalizeLocationMode, normalizeWorkMode } from "@/lib/search-preferences";
+import type { JobSearchResult } from "@/lib/jobs/types";
 
 const IDLE_DELAY_MS = 5000;
 const HEARTBEAT_MS = readPositiveNumber(process.env.JOB_HEARTBEAT_MS, 5000);
@@ -188,6 +191,9 @@ async function processClaimedJob(job: JobSearchQueueRow) {
     fallbackCount: 0
   };
 
+  // Eşleşen ilanlar için CV uyarlama + başvuru paketi üretimi.
+  const applySummary = await runApplyStage(job, text, fileType, profileResult, evaluation, finalResults);
+
   console.log(`[Worker] Job ${job.id} - Completed with ${finalResults.length} results.`);
   await pool.query(
     `UPDATE job_searches
@@ -197,13 +203,91 @@ async function processClaimedJob(job: JobSearchQueueRow) {
          result_count = ?,
          summary = ?,
          results = ?,
+         apply_summary = ?,
          cv_text = NULL,
          locked_at = NULL,
          error_message = NULL,
          updated_at = NOW()
      WHERE id = ?`,
-    [finalResults.length, JSON.stringify(summary), JSON.stringify(finalResults), job.id]
+    [
+      finalResults.length,
+      JSON.stringify(summary),
+      JSON.stringify(finalResults),
+      applySummary ? JSON.stringify(applySummary) : null,
+      job.id
+    ]
   );
+}
+
+/**
+ * Arama sonuçlarından başvuru paketleri üretir.
+ *
+ * Bu aşama "best effort"tur: hata verirse arama sonucu yine de kaydedilir ve
+ * kullanıcı ilanlarını görür. Oturumsuz (userId olmayan) bir kuyruk işi için
+ * hiç çalışmaz — başvuru sahibi belli değilse kimse adına CV üretilmez.
+ */
+async function runApplyStage(
+  job: JobSearchQueueRow,
+  cvText: string,
+  fileType: QueuedFileType,
+  profileResult: AiExtractedProfile,
+  evaluation: CvEvaluation,
+  results: JobSearchResult[]
+): Promise<PrepareApplicationsSummary | null> {
+  const userId = job.user_id != null ? Number(job.user_id) : null;
+
+  if (!userId || !results.length) {
+    return null;
+  }
+
+  try {
+    const pool = getDbPool();
+    await pool.query("UPDATE job_searches SET progress = GREATEST(progress, 92), updated_at = NOW() WHERE id = ?", [job.id]);
+
+    // Analiz çıktılarını ana CV kaydına yaz; uyarlama bunları kullanır.
+    const cvId =
+      job.cv_id != null
+        ? Number(job.cv_id)
+        : await savePrimaryCv({ userId, rawText: cvText, fileType, aiProfile: profileResult, evaluation });
+
+    const storedCv = (await getCvById(cvId, userId)) ?? (await getPrimaryCv(userId));
+
+    if (!storedCv) {
+      console.warn(`[Worker] Job ${job.id} - Ana CV kaydı bulunamadı, başvuru üretimi atlandı.`);
+      return null;
+    }
+
+    console.log(`[Worker] Job ${job.id} - ${results.length} ilan için CV uyarlama ve başvuru hazırlığı başlıyor...`);
+
+    const applySummary = await prepareApplicationsForResults({
+      userId,
+      searchId: job.id,
+      cv: storedCv,
+      results
+    });
+
+    console.log(
+      `[Worker] Job ${job.id} - Başvuru özeti: ${applySummary.prepared} hazırlandı, ` +
+        `${applySummary.autoSent} otomatik gönderildi, ${applySummary.needsReview} onay bekliyor, ` +
+        `${applySummary.manualRequired} elle başvuru, ${applySummary.failed} hata.`
+    );
+
+    return applySummary;
+  } catch (error) {
+    // Başvuru aşaması, tamamlanmış bir aramayı asla başarısız yapmaz.
+    console.error(`[Worker] Job ${job.id} - Başvuru hazırlama aşaması hata verdi:`, error);
+    return {
+      prepared: 0,
+      autoSent: 0,
+      needsReview: 0,
+      manualRequired: 0,
+      skippedBelowThreshold: 0,
+      failed: 0,
+      notes: [
+        `Başvuru hazırlama aşaması hata verdi: ${error instanceof Error ? error.message : String(error)}`
+      ]
+    };
+  }
 }
 
 async function markJobFailed(jobId: number, error: unknown) {

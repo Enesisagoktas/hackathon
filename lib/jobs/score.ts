@@ -100,7 +100,12 @@ function buildScoredResult(listing: CrawledJobListing, aiScore: AiScoreItem, idS
     actionLabel: "İlanı Aç",
     postedAt: listing.postedAt,
     matchedKeywords: aiScore.matchedKeywords.slice(0, 10),
-    criteriaMatch: sanitizeCriteriaMatch(aiScore.criteriaMatch)
+    criteriaMatch: sanitizeCriteriaMatch(aiScore.criteriaMatch),
+    // Başvuru katmanı bu üçünü kullanır: ilanı DB kaydına bağlamak ve
+    // CV'yi ilanın gerçek nitelik metnine göre uyarlamak için.
+    listingId: listing.listingId,
+    requirements: listing.requirements,
+    candidateCriteria: listing.candidateCriteria
   };
 }
 
@@ -200,7 +205,10 @@ function buildUnscoredResults(listings: CrawledJobListing[]): JobSearchResult[] 
       confidence: "low",
       actionLabel: "İlanı Aç",
       postedAt: listing.postedAt,
-      matchedKeywords: []
+      matchedKeywords: [],
+      listingId: listing.listingId,
+      requirements: listing.requirements,
+      candidateCriteria: listing.candidateCriteria
     };
   });
 }

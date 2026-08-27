@@ -1,161 +1,245 @@
 # CVMatch
 
-CVMatch, Türkiye odaklı bir **CV analiz ve gerçek iş ilanı eşleştirme** uygulamasıdır. Kullanıcı PDF/DOCX CV yükler; sistem aday profilini çıkarır, veritabanındaki **aktif gerçek ilanları** filtreler, en uygunları AI ile puanlar ve doğrudan **ilan detay linkleriyle** listeler.
+CV'nizi yükleyin. Sistem size uygun ilanları bulur, **her ilan için CV'nizi o ilana göre yeniden yazar**, ön yazısını hazırlar ve — izin verdiğiniz eşiğin üstündeki eşleşmelerde — **başvuruyu sizin adınıza gönderir**.
 
-## Mimari: neden cache-first?
-
-En kritik tasarım kararı: **kullanıcı CV yüklediğinde canlı crawler çalışmaz.**
-
-Canlı bir crawler kullanıcı akışında çalışırsa siteler yavaş açılır, anti-bot korumaları devreye girer ve kullanıcı dakikalarca bekler. Bunun yerine sistem dört rolü ayırır:
-
-| Rol | Ne yapar | Ne zaman çalışır |
-| --- | --- | --- |
-| **Crawler** | İş sitelerinden ilan toplar, normalize edip `job_listings` cache'ine yazar | Arka planda (`npm run crawl:jobs`) |
-| **Verifier** | Cache'teki ilanların hâlâ açık olup olmadığını kontrol eder (active/stale/expired) | Arka planda (`npm run verify:jobs`) |
-| **Search** | DB cache'ten hızlı eşleştirme yapar | Kullanıcı CV yükleyince |
-| **AI** | Sadece kısa listeyi (en iyi ~15 ilan) CV'ye göre puanlar | Kullanıcı akışında, kısa liste üzerinde |
-
-Akışlar:
+## Akış
 
 ```
-Arka plan veri hazırlama:
-  İş siteleri -> crawler -> normalize -> MySQL job_listings
-
-Kullanıcı akışı (hızlı):
-  CV upload -> CV metin çıkarma -> AI CV profili -> DB aktif ilan ön filtre -> AI skorlama -> sonuçlar
-
-Arka plan doğrulama:
-  job_listings -> verifier -> active / stale / expired
+CV yükle
+   ↓
+AI profil çıkarımı + CV puanlama
+   ↓
+Veritabanı cache'indeki aktif ilanlarla eşleştirme ve skorlama
+   ↓
+Her uygun ilan için:  CV'yi o ilana göre yeniden kurgula  →  PDF + DOCX üret  →  ön yazı yaz
+   ↓
+İlanda başvuru e-postası var mı?
+   ├─ var  →  skor eşiği geçildiyse OTOMATİK GÖNDER, yoksa onay kuyruğuna al
+   └─ yok  →  paketi hazırla, ilan sayfasından tek tıkla tamamlaman için beklet
 ```
 
-Sonuç: CV yükleyen kullanıcı **dakikalarca beklemez**; sonuçlar DB cache'ten hazırlanır. Crawler hiç çalışmamış olsa bile `npm run seed:jobs` ile yüklenen örnek veriyle demo çalışır.
+## Uydurma yasağı
 
-## Özellikler
+Bu sistemin en önemli kuralı: **uyarlanan CV'ye sizde olmayan hiçbir beceri eklenmez.**
 
-- PDF (`pdf-parse`) ve DOCX (`mammoth`) CV metin çıkarma — dosya **diske yazılmaz**, bellekte işlenir.
-- Gemini ile zengin CV profili çıkarımı (beceri, pozisyon, kıdem, hedef roller, sorgu varyasyonları).
-- Gemini ile detaylı CV değerlendirmesi (puan, güçlü/eksik yönler, öneriler).
-- **Gemini erişilemezse otomatik heuristic (kural tabanlı) fallback** — kullanıcı boş ekran görmez.
-- Cache-first ilan araması: FULLTEXT + LIKE ile aday havuzu, ucuz ön filtre skoru, sonra AI skorlama.
-- AI skorlama başarısız olursa ön filtre skoruyla "unscored" gerçek ilan sonuçları döner.
-- Kuyruk tabanlı worker: atomik job claim, heartbeat, timeout, takılan job kurtarma.
-- Sadece gerçek ilan detay linkleri gösterilir; sahte/generic arama linki üretilmez.
-- Tüm Türkiye veya 81 il içinden çoklu il + çalışma modeli (fark etmez/uzaktan/hibrit/ofisten) filtresi.
-- KVKK aydınlatma ve açık rıza kaydı, `bcrypt` ile şifre saklama.
-- Tek sayfalık Türkçe arayüz.
+İlan "Kubernetes zorunlu" diyor ama CV'nizde Kubernetes yoksa, sistem onu CV'ye yazmaz. Bunun yerine ayrı bir **eksikler raporunda** size gösterir. Uydurulmuş bir beceri mülakatta ortaya çıkar ve başvuruyu bitirir.
 
-## Teknoloji
+Teknik olarak bu şöyle uygulanır (`lib/cv/tailor.ts`):
 
-Next.js 14 · TypeScript · React · Tailwind CSS · MySQL (`mysql2`) · Gemini API · `pdf-parse` · `mammoth` · `cheerio` · Puppeteer (yalnızca crawler fallback) · `tsx`
+1. Ana CV'den bir **kanıt indeksi** çıkarılır (beceri listesi + tüm CV metni).
+2. AI'nin önerdiği her beceri bu indekse karşı doğrulanır (`enforceEvidence`).
+3. Kanıtı olmayan terim atılır ve `gaps` raporuna düşer.
+4. Anahtar kelime hizalama tablosunda kanıt kontrolü AI'yi **ezer**: kanıt yoksa "karşılanıyor" denemez.
+
+Uyarlama şunları yapar: ilanın istediği ve sizde **olan** becerileri en üste taşır, ilanın terminolojisini kullanır (ATS uyumu), deneyimlerinizi ilana yakınlığa göre yeniden sıralar, ilanda geçmeyen ama işvereni ilgilendirebilecek gerçek becerilerinizi ayrıca öne çıkarır.
 
 ## Kurulum
 
 ```bash
 npm install
-cp .env.example .env      # değerleri doldurun (Windows: copy .env.example .env)
-npm run migrate           # tabloları oluşturur / eksik kolonları ekler (non-destructive)
-npm run seed:jobs         # cache'e 35+ örnek gerçek ilan yükler (demo için yeterli)
-npm run dev               # http://localhost:3000
 ```
 
-> `npm run seed:jobs` sayesinde canlı crawler hiç çalışmasa bile uygulama sonuç üretir.
-
-### Opsiyonel arka plan komutları
+`.env.example` dosyasını `.env` olarak kopyalayın ve doldurun:
 
 ```bash
-npm run crawl:jobs        # gerçek sitelerden ilan toplayıp cache'i doldurur (arka plan)
-npm run verify:jobs       # cache'teki ilanların açık/kapalı durumunu günceller (arka plan)
-npm run worker            # ayrı bir worker process'i (upload endpoint zaten worker'ı tetikler)
+cp .env.example .env
 ```
+
+**Zorunlu:** `APP_SECRET` (en az 32 karakter). Oturum çerezini imzalar ve SMTP şifrenizi AES-256-GCM ile şifreler. Üretmek için:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+Veritabanını kurun ve örnek ilanları yükleyin:
+
+```bash
+npm run migrate
+```
+
+```bash
+npm run seed:jobs
+```
+
+Uygulamayı başlatın:
+
+```bash
+npm run dev
+```
+
+## Gemini anahtarı
+
+`GEMINI_API_KEY` **olmadan da sistem uçtan uca çalışır**, ancak düşürülmüş modda:
+
+| | Anahtar var | Anahtar yok |
+|---|---|---|
+| CV profil çıkarımı | AI | Kural tabanlı |
+| İlan eşleştirme skoru | 0–100 semantik | Anahtar kelime, **55'te tavanlı** |
+| CV uyarlama | AI ile yeniden yazım | Sıralama + öne çıkarma |
+| Otomatik gönderim | Eşik üstünde çalışır | **Hiç çalışmaz** — hepsi onaya düşer |
+
+Son satır kasıtlıdır: yalnızca anahtar kelime örtüşmesine dayanan bir eşleşmeye güvenip işverene e-posta göndermek sizin itibarınıza zarar verir. Bu koruma `lib/apply/pipeline.ts` içinde `isConfidentMatch` ile uygulanır.
+
+Anahtar yoksa arayüzde bunu açıklayan bir uyarı görünür.
+
+## Otomatik başvuru
+
+Arayüzdeki **Otomatik Başvuru Ayarları** panelinden yapılandırılır. Varsayılan olarak **kapalıdır**; siz açmadıkça hiçbir e-posta gitmez.
+
+| Ayar | Varsayılan | Ne yapar |
+|---|---|---|
+| Otomatik gönderim eşiği | 80 | Bu puanın altındakiler onay bekler |
+| Günlük gönderim tavanı | 10 | Yanlış eşleşmede zararı sınırlar |
+| Paket hazırlama eşiği | 40 | Bu puanın altına CV bile uyarlanmaz |
+| Kendime CC at | açık | Gönderilen her başvurunun kopyası size gelir |
+
+Başvurular **sizin kendi SMTP hesabınızdan** çıkar, sistemin ortak bir adresinden değil. Böylece işverenin "Yanıtla" tuşu doğrudan size döner. Gmail ve Yandex için normal şifre değil **uygulama şifresi** gerekir.
+
+SMTP şifreniz veritabanına AES-256-GCM ile şifrelenmiş olarak yazılır ve hiçbir API yanıtında geri dönmez.
+
+### Prova modu
+
+Gerçek işverenlere e-posta gitmeden tüm akışı denemek için:
+
+```bash
+SMTP_DRY_RUN=true
+```
+
+Bu modda mesaj eksiksiz üretilir (alıcı, konu, gövde, ekler), konsola yazılır ve başvuru "gönderildi" işaretlenir — ama **hiçbir bağlantı açılmaz**. Otomatik başvuruyu açmadan önce bunu kullanın.
+
+## Başvuru durumları
+
+| Durum | Anlamı |
+|---|---|
+| `preparing` | CV uyarlanıyor, dosyalar üretiliyor |
+| `needs_review` | Paket hazır, sizin onayınızı bekliyor |
+| `queued` | Otomatik gönderim için sıraya alındı |
+| `sent` | E-posta gönderildi |
+| `manual_required` | İlanda e-posta yok; ilan sayfasından başvurmalısınız |
+| `skipped` | Atladınız |
+| `failed` | Hazırlama veya gönderim hatası |
+
+Her başvurunun altında **"Sistem bu başvuruda ne yaptı"** bölümü vardır: paketin ne zaman hazırlandığı, alıcı adresinin nereden bulunduğu, neden gönderildiği veya gönderilmediği tek tek yazılır.
+
+## Veri ve KVKK
+
+CV metniniz, her ilana göre yeniden yazılabilmesi için **hesabınıza bağlı olarak saklanır**. (Sistemin önceki sürümü CV'yi analizden sonra siliyordu; uyarlama bunu imkânsız kılıyordu.) Yüklediğiniz dosyanın kendisi diske yazılmaz, yalnızca metni işlenir.
+
+Saklanan CV verisini silmek için:
+
+```bash
+curl -X DELETE http://localhost:3000/api/cv --cookie "cvmatch_session=..."
+```
+
+Hesabınızı sildiğinizde CV'niz, ayarlarınız ve başvurularınız `ON DELETE CASCADE` ile birlikte silinir.
 
 ## Komutlar
 
-| Komut | Açıklama |
-| --- | --- |
+| Komut | Ne yapar |
+|---|---|
 | `npm run dev` | Geliştirme sunucusu |
-| `npm run build` | Production build |
-| `npm run start` | Production sunucu |
-| `npm run lint` | ESLint |
-| `npm run migrate` | Non-destructive DB migration |
+| `npm run build` | Üretim derlemesi (dev sunucusu kapalıyken çalıştırın) |
+| `npm run migrate` | Şema kurulumu/güncelleme (tekrar çalıştırmaya güvenli) |
 | `npm run seed:jobs` | Örnek ilanları cache'e yükler |
-| `npm run crawl:jobs` | Arka plan crawler (cache doldurma) |
-| `npm run verify:jobs` | Arka plan verifier (ilan kapanma kontrolü) |
-| `npm run worker` | Kuyruk worker process'i |
+| `npm run crawl:jobs` | Gerçek ilanları tarar ve cache'i doldurur |
+| `npm run verify:jobs` | Cache'teki ilanların hâlâ açık olduğunu kontrol eder |
+| `npm run worker` | Kuyruk işleyicisini ayrı süreçte çalıştırır |
+| `npm run make:cv` | Test için örnek CV PDF'leri üretir |
+| `npm run test:apply` | Başvuru hattı testi (DB'ye karşı, e-posta göndermez) |
+| `npm run test:e2e` | Uçtan uca HTTP testi (`npm run dev` açıkken) |
 
-`crawl:jobs` özel sorgularla da çalışır: `npm run crawl:jobs -- "react developer" "ihracat uzmanı"`
+`npm run worker` isteğe bağlıdır: API isteği geldiğinde işleyici zaten süreç içinde başlar (`ensureJobWorkerRunning`). Ayrı süreç, uzun taramaları web sunucusundan ayırmak istediğinizde işe yarar.
 
-## Ortam değişkenleri
+## Testler
 
-Tüm değişkenler `.env.example` içinde açıklanmıştır. Önemli olanlar:
+```bash
+npm run test:apply
+```
 
-- `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
-- `GEMINI_API_KEY`, `GEMINI_MODEL` (varsayılan `gemini-2.5-flash`) — **boş bırakılırsa heuristic fallback devreye girer**
-- `GEMINI_TIMEOUT_MS` (20000), `GEMINI_MAX_ATTEMPTS` (2), `GEMINI_MIN_INTERVAL_MS` (500)
-- `CRAWLER_*` — yalnızca arka plan crawler'ı etkiler; kullanıcı akışında çalışmaz. `CRAWLER_ENABLE_LINKEDIN=false` (LinkedIn varsayılan kapalı)
-- `JOB_HEARTBEAT_MS` (5000), `JOB_SEARCH_TIMEOUT_MS` (90000), `JOB_STALE_PROCESSING_MINUTES` (2)
-- `VERIFY_BATCH_SIZE` (50), `VERIFY_FETCH_TIMEOUT_MS` (10000), `VERIFY_EXPIRE_AFTER_DAYS` (30)
+57 kontrol: kanal tespiti, CV bölümleme, **uydurma engeli**, uçtan uca paket üretimi, gerçek PDF/DOCX çıktısı, tekrar başvuru koruması, gönderim korumaları, eşik davranışı ve düşük güvenli eşleşmelerin engellenmesi. Prova modu kullanır; hiçbir e-posta göndermez.
 
-> `.env` git'e gönderilmez (`.gitignore`). Gerçek anahtarlarınızı `.env` içinde tutun.
+```bash
+npm run test:e2e
+```
+
+35 kontrol: yetkilendirme, hesap ele geçirme koruması, CV yükleme, worker akışı, başvuru paketleri, dosya indirme, **kullanıcılar arası veri izolasyonu** ve KVKK silme. Çalışan bir `npm run dev` gerektirir.
 
 ## API
 
-### `POST /api/upload-cv`
-FormData: `file`, `locationMode`, `cities` (JSON string), `workMode`, `userEmail`. İşi kuyruğa atar ve worker'ı tetikler.
+### Kimlik
 
-```json
-{ "searchId": 123, "status": "pending", "message": "İşlem kuyruğa alındı." }
+| Uç | Açıklama |
+|---|---|
+| `POST /api/register` | Kayıt + oturum. E-posta kayıtlıysa aynı şifreyle giriş dener, tutmazsa 409/401 döner. |
+| `POST /api/auth/login` | Giriş |
+| `POST /api/auth/logout` | Çıkış |
+| `GET /api/auth/me` | Oturumdaki kullanıcı ve kayıtlı CV bilgisi |
+
+### CV ve arama
+
+| Uç | Açıklama |
+|---|---|
+| `POST /api/upload-cv` | CV yükler, ana CV olarak saklar, aramayı kuyruğa alır. Oturum zorunlu. |
+| `GET /api/search-jobs/[id]` | Arama durumu, sonuçlar ve başvuru özeti. Yalnızca sahibi okuyabilir. |
+| `GET /api/cv` · `DELETE /api/cv` | Saklanan CV'yi okur / siler |
+
+### Başvurular
+
+| Uç | Açıklama |
+|---|---|
+| `GET /api/applications` | Başvuru listesi ve durum sayaçları |
+| `GET /api/applications/[id]` | Uyarlanmış CV, ön yazı, eksik raporu, denetim izi, HTML önizleme |
+| `POST /api/applications/[id]/send` | Onaylayıp gönderir |
+| `POST /api/applications/[id]/skip` | Atlar |
+| `POST /api/applications/[id]/manual` | Portal başvurusunu "elle yaptım" olarak işaretler |
+| `GET /api/applications/[id]/file?format=pdf\|docx` | Uyarlanmış CV dosyasını indirir |
+
+### Ayarlar
+
+| Uç | Açıklama |
+|---|---|
+| `GET /api/settings/apply` · `PUT /api/settings/apply` | Otomatik başvuru ve SMTP ayarları |
+| `POST /api/settings/apply/verify` | SMTP bağlantısını test eder (e-posta göndermez) |
+
+## Mimari
+
+```
+app/api/…                 HTTP uçları (hepsi oturum kontrollü)
+lib/auth/                 İmzalı çerez oturumu + kullanıcı işlemleri
+lib/cv/
+  structured.ts           Ham CV metnini bölümlere ayırır (AI + kural tabanlı yedek)
+  skill-dictionary.ts     Beceri sözlüğü + yapışık metin çözümleme
+  tailor.ts               İlana göre CV yeniden kurgulama + uydurma engeli
+  render-html.ts          ATS uyumlu HTML şablon
+  render-files.ts         PDF (puppeteer) + DOCX (docx) üretimi
+  store.ts                Ana CV deposu
+lib/apply/
+  channel.ts              İlanda başvuru e-postası var mı?
+  pipeline.ts             Uyarla → üret → kanal seç → gönder/onaya bırak
+  mailer.ts               SMTP gönderimi + prova modu
+  settings.ts             Kullanıcı başına otomatik başvuru ayarları
+  secret.ts               SMTP şifresi şifreleme (AES-256-GCM)
+  repository.ts           Başvuru kayıtları ve denetim izi
+lib/jobs/                 İlan cache'i, crawler, skorlama
+lib/job-worker.ts         Kuyruk işleyicisi
 ```
 
-### `GET /api/search-jobs/[id]`
-Job durumunu döner. Frontend 3 saniyede bir bu endpoint'i sorgular. `cv_text` asla dönmez. `pending`/`processing` görürse worker'ı tetikler, takılan `processing` job'ı otomatik `pending`'e çeker.
+### Türkçe metin işleme notu
 
-```json
-{ "id": 123, "status": "completed", "progress": 100, "aiProfile": {}, "evaluation": {}, "summary": {}, "results": [] }
-```
+Kod içinde birkaç yerde `\b` ve `/i` yerine ASCII normalleştirme kullanılır. Sebebi: JavaScript'te `/^iş/i.test("İŞ DENEYİMİ")` **false** döner. `İ` (U+0130) ile `i` regex'in `/i` bayrağıyla eşleşmez ve `\b` sınırı `\w = [A-Za-z0-9_]` ile tanımlı olduğu için Türkçe harflerde oluşmaz. Bu, büyük harfli Türkçe CV'lerin tamamının sessizce ayrıştırılamamasına yol açar. `lib/cv/structured.ts` içindeki bölüm başlığı eşleştirmesi ve şehir tespiti bu yüzden normalize edilmiş metin üzerinden çalışır.
 
-`results` dizisindeki her öğe gerçek bir ilandır (`kind: "job"`) ve `url` alanı platform ilan detay linkidir.
+### ATS uyumu notu
 
-### `POST /api/search-jobs`
-Profil verisiyle doğrudan cache-first arama (geriye uyumluluk). Canlı crawler çağırmaz.
+Üretilen CV'de her görsel boşluğun altında **gerçek bir ayırıcı karakter** vardır. Beceriler flex "pill" düzeniyle değil `·` ayırıcılı satır içi metinle yazılır; iş/eğitim kayıtlarında tarih, başlıkla aynı satırda flex `space-between` ile değil alt satırda şirket/konumla birlikte yer alır. Sebebi: flex boşluğu PDF metnine boşluk karakteri koymaz ve ilan sistemleri `"TypeScriptReact"`, `"Bilgisayar Mühendisliği2016 - 2020"` gibi birleşik metin okur.
 
-### `POST /api/register`
-KVKK/açık rıza ile kullanıcı kaydı. Şifre `bcrypt` ile hashlenir.
+Aynı sorun *gelen* CV'lerde de vardır; `lib/cv/skill-dictionary.ts` yapışık beceri bloklarını sözlükle çözer.
 
-### `POST /api/generate-job-links`
-Eski endpoint, geriye uyumluluk için durur. Yeni arayüz `/api/upload-cv` kuyruk akışını kullanır.
+## Teknoloji
 
-## Veri tabanı
+Next.js 14 · TypeScript · Tailwind CSS · MySQL 8 · Gemini · Puppeteer (PDF) · docx (DOCX) · Nodemailer (SMTP) · Cheerio (crawler)
 
-`npm run migrate` **non-destructive** çalışır: `CREATE TABLE IF NOT EXISTS` kullanır, tabloları/kolonları **drop etmez**, eksik kolonları `ALTER TABLE ADD COLUMN` ile ekler, enum'ları yerinde genişletir. Tablolar:
+## Sınırlar
 
-- `job_sources` — platform kaynakları
-- `job_listings` — gerçek ilan cache'i (`status`: active/stale/expired/failed, `last_checked_at`, FULLTEXT index)
-- `job_searches` — CV arama kuyruğu (`cv_text` completed/failed sonrası NULL'lanır)
-- `users` — KVKK/kayıt
-- `job_search_results`, `crawl_runs` — yardımcı tablolar
-
-## Demo akışı
-
-1. `npm run migrate && npm run seed:jobs && npm run dev`
-2. Tarayıcıda `http://localhost:3000`
-3. KVKK onayını ver, hesabı oluştur.
-4. PDF/DOCX bir CV yükle, lokasyon ve çalışma modeli seç, "CV Analizini Başlat".
-5. İlerleme çubuğu dolarken ("Sonuçlar hazırlanıyor. İlerleme: %X") sonuçlar DB cache'ten hazırlanır.
-6. Tamamlandığında CV analiz kartı + skorlanmış gerçek ilan kartları ("İlanı Aç" linkleriyle) görünür.
-
-## Sorun giderme
-
-- **Gemini 403 / anahtar hatası** → API anahtarı veya model yetkisi sorunlu. Sistem otomatik heuristic fallback'e geçer; sonuçlar yine görünür (`evaluation.source: "heuristic"`). Doğru bir `GEMINI_API_KEY` girip modeli (`GEMINI_MODEL`) hesabınızın erişebildiği bir değere ayarlayın.
-- **Sonuçlar boş** → `npm run seed:jobs` çalıştırın. DB'de `status='active'` ilan olduğundan emin olun.
-- **DB bağlantı hatası** → `MYSQL_*` değerlerini kontrol edin; MySQL'in çalıştığından ve veritabanı kullanıcısının yetkili olduğundan emin olun. `npm run migrate` veritabanını oluşturur.
-- **Crawler boş dönüyor** → Normaldir; platformların anti-bot koruması olabilir. Demo `seed:jobs` ile çalışır, crawler arka plan içindir.
-- **`verify:jobs` örnek ilanları "expired" yaptı** → Örnek (sample) ilanların URL'leri gerçek formatlı ama canlı sayfa değildir; verifier bazılarını 404 nedeniyle kapalı işaretleyebilir. Demo cache'ini geri yüklemek için tekrar `npm run seed:jobs` çalıştırın (ilanlar yeniden `active` olur). Verifier asıl olarak `crawl:jobs` ile toplanan gerçek ilanlar içindir.
-- **Job "processing"da takıldı** → Status endpoint'i `JOB_STALE_PROCESSING_MINUTES` sonrası job'ı otomatik `pending`'e çekip yeniden işler.
-- **AI skorları yerine "Manuel arama / düşük güven" sonuçlar** → Gemini geçici olarak yoğun/erişilemez (ör. 503) olabilir. Sistem bu durumda ön eşleşme puanıyla gerçek ilanları yine gösterir; birkaç dakika sonra tekrar deneyin.
-
-## Gizlilik
-
-- CV dosyası **diske yazılmaz**, sadece bellekte parse edilir.
-- CV metni (`cv_text`) yalnızca job işlenene kadar geçici tutulur; completed/failed sonrası **NULL** yapılır.
-- API yanıtları `cv_text` döndürmez.
-- Şifreler `bcrypt` ile hashlenir; KVKK ve açık rıza tarihleri saklanır.
+- **Kariyer.net / LinkedIn gibi portallara otomatik giriş yapılmaz.** Sistem sizin portal şifrelerinizi istemez ve saklamaz. Bu ilanlar için başvuru paketi hazırlanır, gönderimi ilan sayfasından siz tamamlarsınız.
+- Otomatik gönderim yalnızca **ilan metninde başvuru e-postası bulunan** ilanlarda mümkündür. Platform adresleri (`info@kariyer.net`), `noreply@…` ve başvuru bağlamı olmayan adresler kasıtlı olarak elenir.
+- İlan cache'i `npm run crawl:jobs` ile doldurulur; kullanıcı akışında canlı tarama yapılmaz.

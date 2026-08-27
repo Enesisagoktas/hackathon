@@ -9,6 +9,8 @@ import type { CvEvaluation } from "@/lib/cv-evaluation";
 import type { AiCvProfile } from "@/lib/jobs/types";
 import { cn } from "@/lib/utils";
 import { AccountConsent, type RegisteredUser } from "@/components/AccountConsent";
+import { ApplicationsPanel } from "@/components/ApplicationsPanel";
+import { ApplySettings } from "@/components/ApplySettings";
 import { CvEvaluationCard } from "@/components/CvEvaluationCard";
 import { JobLinks } from "@/components/JobLinks";
 import { LocationSelector } from "@/components/LocationSelector";
@@ -36,6 +38,17 @@ type AnalysisResult = {
   };
 };
 
+/** Worker'ın başvuru aşamasından dönen özet. */
+type ApplySummary = {
+  prepared: number;
+  autoSent: number;
+  needsReview: number;
+  manualRequired: number;
+  skippedBelowThreshold: number;
+  failed: number;
+  notes: string[];
+};
+
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
 const ACCEPTED_TYPES = [
   "application/pdf",
@@ -59,6 +72,9 @@ export function CvUpload() {
   const [isUploading, setIsUploading] = useState(false);
   const [isSearchingJobs, setIsSearchingJobs] = useState(false);
   const [searchProgress, setSearchProgress] = useState(0);
+  const [applySummary, setApplySummary] = useState<ApplySummary | null>(null);
+  // Değeri değiştiğinde başvuru panosu kendini yeniler.
+  const [applicationsToken, setApplicationsToken] = useState(0);
 
   useEffect(() => {
     return () => {
@@ -94,6 +110,7 @@ export function CvUpload() {
     setFallbackResults([]);
     setJobSummary(null);
     setAnalysis(null);
+    setApplySummary(null);
 
     try {
       const formData = new FormData();
@@ -101,7 +118,6 @@ export function CvUpload() {
       formData.append("locationMode", locationMode);
       formData.append("cities", JSON.stringify(selectedCities));
       formData.append("workMode", workMode);
-      formData.append("userEmail", registeredUser.email);
 
       const response = await fetch("/api/upload-cv", {
         method: "POST",
@@ -171,8 +187,11 @@ export function CvUpload() {
           setJobResults(validJobs);
           setFallbackResults([]); // Don't show fallback links in UX
           setJobSummary(data.summary ?? null);
+          setApplySummary(data.applySummary ?? null);
           setIsSearchingJobs(false);
           setSearchProgress(100);
+          // Başvuru paketleri worker tarafından üretildi; panoyu tazele.
+          setApplicationsToken((token) => token + 1);
         } else if (data.status === "failed") {
           stopPolling();
           setError(data.errorMessage ?? "İşlem sırasında bir hata oluştu.");
@@ -302,13 +321,16 @@ export function CvUpload() {
     <div className="space-y-5">
       <AccountConsent onUserChange={setRegisteredUser} />
 
+      {registeredUser ? <ApplySettings /> : null}
+
       <Card className="border-teal-100 bg-white/90 shadow-soft backdrop-blur">
         <CardHeader>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <CardTitle>CV Analizi ve İş Arama</CardTitle>
+              <CardTitle>CV Analizi, İlana Özel CV ve Başvuru</CardTitle>
               <CardDescription className="mt-2">
-                PDF veya DOCX CV yükleyin. Dosya sadece analiz isteği sırasında işlenir, kalıcı olarak saklanmaz.
+                PDF veya DOCX CV yükleyin. CV metniniz, her ilana göre yeniden yazılabilmesi için hesabınıza bağlı
+                olarak saklanır; dilediğiniz an silebilirsiniz.
               </CardDescription>
             </div>
             <Badge className="w-fit border-amber-200 bg-amber-50 text-amber-700" variant="outline">
@@ -370,7 +392,7 @@ export function CvUpload() {
 
             <div className="flex flex-col gap-3 rounded-3xl border bg-slate-50/80 p-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm leading-6 text-slate-600">
-                {isSearchingJobs ? `Sonuçlar hazırlanıyor. İlerleme: %${searchProgress}` : "Analizden sonra platformlar taranacak, gerçek ilan detayları parse edilip CV'nize göre sıralanacak."}
+                {isSearchingJobs ? `Sonuçlar hazırlanıyor. İlerleme: %${searchProgress}` : "Analizden sonra ilanlar CV'nize göre skorlanacak, uygun her ilan için CV'niz yeniden yazılıp başvuru paketi hazırlanacak."}
               </p>
               <Button className="self-end" disabled={!file || !registeredUser || isBusy} size="lg" type="submit">
                 {isBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -502,8 +524,59 @@ export function CvUpload() {
         </div>
       ) : null}
 
+      {applySummary ? <ApplySummaryCard summary={applySummary} /> : null}
+
+      {registeredUser ? <ApplicationsPanel refreshToken={applicationsToken} /> : null}
+
       <JobLinks results={jobResults} fallbackResults={fallbackResults} summary={jobSummary} isLoading={isSearchingJobs} />
     </div>
+  );
+}
+
+/** Worker'ın bu turda kaç başvuru hazırlayıp kaçını gönderdiğini özetler. */
+function ApplySummaryCard({ summary }: { summary: ApplySummary }) {
+  const items: Array<[string, number]> = [
+    ["Hazırlanan paket", summary.prepared],
+    ["Otomatik gönderilen", summary.autoSent],
+    ["Onay bekleyen", summary.needsReview],
+    ["Elle başvuru", summary.manualRequired]
+  ];
+
+  return (
+    <Card className="border-teal-100 bg-white/90 shadow-sm">
+      <CardHeader>
+        <CardTitle className="text-lg">Bu turda başvuru motoru ne yaptı</CardTitle>
+        <CardDescription className="mt-1">
+          Eşleşen her ilan için CV&apos;niz o ilana göre yeniden yazıldı.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-4">
+          {items.map(([label, value]) => (
+            <div key={label} className="rounded-2xl border bg-slate-50 p-3">
+              <p className="text-2xl font-semibold text-slate-950">{value}</p>
+              <p className="mt-0.5 text-sm text-slate-500">{label}</p>
+            </div>
+          ))}
+        </div>
+
+        {summary.skippedBelowThreshold > 0 ? (
+          <p className="text-sm text-slate-500">
+            {summary.skippedBelowThreshold} ilan hazırlama eşiğinin altında kaldığı için atlandı.
+          </p>
+        ) : null}
+
+        {summary.failed > 0 ? (
+          <p className="text-sm text-red-700">{summary.failed} ilanda başvuru paketi hazırlanamadı.</p>
+        ) : null}
+
+        {summary.notes.map((note, index) => (
+          <p key={index} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">
+            {note}
+          </p>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 

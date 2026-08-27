@@ -9,6 +9,10 @@ export type EnqueueJobSearchInput = {
   cvText: string;
   fileType: QueuedFileType;
   userEmail?: string;
+  /** Oturumdaki kullanıcı. Başvuru üretimi buna bağlıdır. */
+  userId?: number;
+  /** Kaydedilmiş ana CV kaydı (user_cvs.id). */
+  cvId?: number;
   locationMode: LocationMode;
   cities: string[];
   workMode: WorkMode;
@@ -17,6 +21,8 @@ export type EnqueueJobSearchInput = {
 export type JobSearchQueueRow = mysql.RowDataPacket & {
   id: number;
   user_email: string | null;
+  user_id: number | null;
+  cv_id: number | null;
   cv_text: string | null;
   file_type: QueuedFileType | null;
   location_mode: LocationMode | null;
@@ -35,10 +41,12 @@ export async function enqueueJobSearch(input: EnqueueJobSearchInput) {
   const pool = getDbPool();
   const [result] = await pool.query<mysql.ResultSetHeader>(
     `INSERT INTO job_searches
-       (user_email, status, progress, cv_text, file_type, location_mode, cities, work_mode, started_at, updated_at)
-     VALUES (?, 'pending', 0, ?, ?, ?, ?, ?, NOW(), NOW())`,
+       (user_email, user_id, cv_id, status, progress, cv_text, file_type, location_mode, cities, work_mode, started_at, updated_at)
+     VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, NOW(), NOW())`,
     [
       input.userEmail ?? null,
+      input.userId ?? null,
+      input.cvId ?? null,
       input.cvText,
       input.fileType,
       input.locationMode,
@@ -103,6 +111,18 @@ async function doEnsureJobQueueSchema() {
 
   if (!existing.has("updated_at")) {
     alters.push("ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at");
+  }
+
+  if (!existing.has("user_id")) {
+    alters.push("ADD COLUMN user_id BIGINT UNSIGNED NULL AFTER user_email");
+  }
+
+  if (!existing.has("cv_id")) {
+    alters.push("ADD COLUMN cv_id BIGINT UNSIGNED NULL AFTER user_id");
+  }
+
+  if (!existing.has("apply_summary")) {
+    alters.push("ADD COLUMN apply_summary JSON NULL AFTER summary");
   }
 
   if (alters.length) {

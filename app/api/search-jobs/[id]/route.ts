@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getDbPool } from "@/lib/db";
 import { ensureJobQueueSchema, parseJsonField } from "@/lib/job-queue";
 import { ensureJobWorkerRunning } from "@/lib/job-worker";
+import { getSessionUserId } from "@/lib/auth/session";
 import mysql from "mysql2/promise";
 
 export const runtime = "nodejs";
@@ -23,7 +24,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
     // Fetch the job_searches record
     const [rows] = await pool.query<mysql.RowDataPacket[]>(
       `SELECT status, progress, started_at, completed_at, error_message, locked_at, updated_at,
-              ai_profile, evaluation, summary, results
+              user_id, ai_profile, evaluation, summary, results, apply_summary
        FROM job_searches 
        WHERE id = ?`,
       [searchId]
@@ -34,6 +35,13 @@ export async function GET(request: Request, { params }: { params: { id: string }
     }
 
     let row = rows[0];
+
+    // Sahiplik kontrolü: bir aramanın CV profili ve değerlendirmesi kişisel
+    // veridir. Kayıt bir kullanıcıya bağlıysa yalnızca o kullanıcı okuyabilir.
+    // (Var olmayan kayıtla aynı yanıt döner ki id denemesiyle varlık anlaşılmasın.)
+    if (row.user_id != null && Number(row.user_id) !== getSessionUserId()) {
+      return NextResponse.json({ message: "Arama bulunamadı" }, { status: 404 });
+    }
 
     if (row.status === "processing" && isStaleProcessing(row)) {
       await pool.query(
@@ -49,7 +57,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
 
       const [freshRows] = await pool.query<mysql.RowDataPacket[]>(
         `SELECT status, progress, started_at, completed_at, error_message, locked_at, updated_at,
-                ai_profile, evaluation, summary, results
+                user_id, ai_profile, evaluation, summary, results, apply_summary
          FROM job_searches
          WHERE id = ?`,
         [searchId]
@@ -71,7 +79,8 @@ export async function GET(request: Request, { params }: { params: { id: string }
       aiProfile: parseJsonField(row.ai_profile, null),
       evaluation: parseJsonField(row.evaluation, null),
       summary: parseJsonField(row.summary, null),
-      results: parseJsonField(row.results, [])
+      results: parseJsonField(row.results, []),
+      applySummary: parseJsonField(row.apply_summary, null)
     });
     
   } catch (error) {

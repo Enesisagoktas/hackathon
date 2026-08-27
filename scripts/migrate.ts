@@ -32,11 +32,21 @@ async function run() {
     console.log("[migrate] Running database/schema.sql (non-destructive)...");
     await pool.query(schema);
 
+    // CV uyarlama + başvuru tabloları. schema.sql'den SONRA çalışmalı:
+    // user_cvs ve job_applications, users/job_listings tablolarına foreign key verir.
+    const applicationsPath = path.resolve(process.cwd(), "database/applications.sql");
+    const applicationsSchema = await fs.readFile(applicationsPath, "utf-8");
+
+    console.log("[migrate] Running database/applications.sql (başvuru katmanı)...");
+    await pool.query(applicationsSchema);
+
     console.log("[migrate] Ensuring job_searches columns...");
     await ensureJobQueueSchema();
 
     console.log("[migrate] Ensuring job_listings columns...");
     await ensureJobListingsColumns(pool);
+
+    warnAboutAppSecret();
 
     console.log("[migrate] Database is up to date.");
   } catch (error) {
@@ -102,6 +112,23 @@ async function ensureJobListingsColumns(pool: mysql.Pool) {
   await ensureIndex(pool, "job_listings", "job_listings_status_seen_idx", "(status, last_seen_at)");
   await ensureIndex(pool, "job_listings", "job_listings_status_checked_idx", "(status, last_checked_at)");
   await ensureFulltextIndex(pool, "job_listings", "job_listings_fulltext_idx", "(title, company, description)");
+}
+
+/**
+ * APP_SECRET olmadan oturum açılamaz ve SMTP şifresi saklanamaz; bu yüzden
+ * migrate sırasında eksikliği yüksek sesle uyarılır.
+ */
+function warnAboutAppSecret() {
+  const secret = process.env.APP_SECRET;
+
+  if (!secret || secret.length < 32) {
+    console.warn(
+      "\n[migrate] UYARI: APP_SECRET tanımlı değil veya 32 karakterden kısa.\n" +
+        "  Giriş ve otomatik başvuru bu değer olmadan çalışmaz.\n" +
+        "  Üretmek için: node -e \"console.log(require('crypto').randomBytes(48).toString('base64url'))\"\n" +
+        "  Sonucu .env dosyasına APP_SECRET=... olarak ekleyin.\n"
+    );
+  }
 }
 
 async function indexMissing(pool: mysql.Pool, table: string, indexName: string) {

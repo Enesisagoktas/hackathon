@@ -1,7 +1,16 @@
-import bcrypt from "bcryptjs";
 import { NextResponse } from "next/server";
 
-import { getDbPool } from "@/lib/db";
+import { setSessionCookie } from "@/lib/auth/session";
+import {
+  AuthError,
+  authenticateUser,
+  getUserByEmail,
+  isValidEmailAddress,
+  recordConsent,
+  registerUser,
+  sanitizeEmail,
+  sanitizeName
+} from "@/lib/auth/users";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +23,13 @@ type RegisterBody = {
   explicitConsentAccepted?: boolean;
 };
 
+/**
+ * Kayıt olur ve oturum açar.
+ *
+ * E-posta zaten kayıtlıysa hesabın üzerine yazmak yerine aynı şifreyle giriş
+ * denenir. Şifre tutmuyorsa 409 döner. (Eski sürüm mevcut hesabın şifresini
+ * eziyordu — hesap ele geçirmeye açıktı.)
+ */
 export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => null)) as RegisterBody | null;
@@ -30,7 +46,7 @@ export async function POST(request: Request) {
       return errorResponse("Ad soyad en az 3 karakter olmalıdır.", 400);
     }
 
-    if (!isValidEmail(email)) {
+    if (!isValidEmailAddress(email)) {
       return errorResponse("Geçerli bir e-posta adresi girin.", 400);
     }
 
@@ -42,45 +58,40 @@ export async function POST(request: Request) {
       return errorResponse("KVKK aydınlatma metni ve açık rıza kabul edilmelidir.", 400);
     }
 
-    const passwordHash = await bcrypt.hash(password, 12);
-    const pool = getDbPool();
+    const existing = await getUserByEmail(email);
 
-    await pool.execute(
-      `INSERT INTO users (full_name, email, password_hash, kvkk_accepted_at, explicit_consent_accepted_at)
-       VALUES (:fullName, :email, :passwordHash, NOW(), NOW())
-       ON DUPLICATE KEY UPDATE
-         full_name = VALUES(full_name),
-         password_hash = VALUES(password_hash),
-         kvkk_accepted_at = VALUES(kvkk_accepted_at),
-         explicit_consent_accepted_at = VALUES(explicit_consent_accepted_at),
-         updated_at = NOW()`,
-      { fullName, email, passwordHash }
-    );
+    if (existing) {
+      // Aynı kişi tekrar geliyorsa şifresiyle doğrulanır; değilse reddedilir.
+      const user = await authenticateUser(email, password);
+      await recordConsent(user.id);
+      setSessionCookie(user.id);
+
+      return NextResponse.json({
+        user: { id: user.id, fullName: user.fullName, email: user.email },
+        returning: true
+      });
+    }
+
+    const user = await registerUser({ fullName, email, password });
+    setSessionCookie(user.id);
 
     return NextResponse.json({
-      user: {
-        fullName,
-        email,
-        kvkkAccepted: true,
-        explicitConsentAccepted: true
-      }
+      user: { id: user.id, fullName: user.fullName, email: user.email },
+      returning: false
     });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return errorResponse(
+        error.status === 401
+          ? "Bu e-posta zaten kayıtlı ancak şifre eşleşmedi. Mevcut şifrenizle giriş yapın."
+          : error.message,
+        error.status
+      );
+    }
+
     console.error("Registration failed", error);
     return errorResponse("Kayıt oluşturulurken hata oluştu. MySQL bağlantı ve tablo ayarlarını kontrol edin.", 500);
   }
-}
-
-function sanitizeName(value: string) {
-  return value.replace(/[<>"'`]/g, "").replace(/\s+/g, " ").trim().slice(0, 120);
-}
-
-function sanitizeEmail(value: string) {
-  return value.trim().toLocaleLowerCase("tr-TR").slice(0, 190);
-}
-
-function isValidEmail(value: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function errorResponse(message: string, status: number) {

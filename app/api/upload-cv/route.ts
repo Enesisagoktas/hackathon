@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { getSessionUser } from "@/lib/auth/session";
+import { savePrimaryCv } from "@/lib/cv/store";
 import { extractDocxText } from "@/lib/extract-docx";
 import { extractPdfText } from "@/lib/extract-pdf";
 import { enqueueJobSearch } from "@/lib/job-queue";
@@ -44,16 +46,34 @@ export async function POST(request: Request) {
     const locationMode = normalizeLocationMode(readFormString(formData, "locationMode"));
     const cities = normalizeCities(parseJsonArray(readFormString(formData, "cities")));
     const workMode = normalizeWorkMode(readFormString(formData, "workMode"));
-    const userEmail = sanitizeEmail(readFormString(formData, "userEmail"));
 
     if (locationMode === "cities" && cities.length === 0) {
       return errorResponse("İl seç modunda en az bir il seçin.", 400);
     }
 
+    // Kimlik yalnızca imzalı oturum çerezinden okunur; istemciden gelen
+    // e-posta alanına güvenilmez.
+    const user = await getSessionUser();
+
+    if (!user) {
+      return errorResponse("CV yüklemek için giriş yapmanız gerekiyor.", 401);
+    }
+
+    // CV'yi ana CV olarak sakla: her ilana göre yeniden yazabilmek için
+    // ham metnin kalıcı olması gerekiyor.
+    const cvId = await savePrimaryCv({
+      userId: user.id,
+      rawText: text,
+      fileType,
+      fileName: file.name.slice(0, 255)
+    });
+
     const { searchId } = await enqueueJobSearch({
       cvText: text,
       fileType,
-      userEmail,
+      userEmail: user.email,
+      userId: user.id,
+      cvId,
       locationMode,
       cities,
       workMode
@@ -63,6 +83,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       searchId,
+      cvId,
       status: "pending",
       message: "İşlem kuyruğa alındı."
     });
@@ -115,14 +136,6 @@ function parseJsonArray(value: string | undefined) {
   }
 }
 
-function sanitizeEmail(value: string | undefined) {
-  if (!value) {
-    return undefined;
-  }
-
-  const email = value.trim().toLocaleLowerCase("tr-TR").slice(0, 190);
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined;
-}
 
 function errorResponse(message: string, status: number) {
   return NextResponse.json({ message }, { status });

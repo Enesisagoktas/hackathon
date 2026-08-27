@@ -12,3 +12,7 @@ yarn-error.log*
 pnpm-debug.log*
 *.tsbuildinfo
 /samples
+storage/
+
+# Yerel Claude Code araç yapılandırması (worktree dizinlerini de içerir)
+.claude/
