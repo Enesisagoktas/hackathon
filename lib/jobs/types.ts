@@ -172,7 +172,15 @@ export type PlatformCrawlStatus = {
   status: "success" | "partial" | "empty" | "failed" | "timeout";
   searchedUrls: number;
   discoveredUrls: number;
+  /**
+   * Detay sayfasından BAŞARIYLA okunan ilan sayısı (ilgi filtresinden ÖNCE).
+   *
+   * Kaynak sağlığı bu sayıya bakar: bir kaynak düzgün çalışıp aramayla
+   * alakasız ilanlar döndürebilir; bu, kaynağın bozuk olduğu anlamına gelmez.
+   */
   parsedListings: number;
+  /** Profille ilgili bulunup kabul edilen ilan sayısı. */
+  relevantListings: number;
   message?: string;
 };
 

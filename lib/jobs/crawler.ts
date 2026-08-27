@@ -18,6 +18,7 @@ import {
   uniq
 } from "@/lib/jobs/normalize";
 import { filterListingsByProfile } from "@/lib/jobs/relevance";
+import { recordCrawlResult } from "@/lib/jobs/source-health";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 CVMatchBot/1.0";
@@ -177,6 +178,10 @@ export async function crawlJobs(profile: CandidateProfile): Promise<CrawlJobsRes
   const listings = uniqListings(adapterResults.flatMap((result) => result.listings));
   const statuses = adapterResults.map((result) => result.status);
 
+  // §6 — Her taramanın sonucu kaydedilir; böylece bir kaynağın sessizce
+  // bozulması tahminle değil ölçümle görülür. Kayıt hatası aramayı düşürmez.
+  await Promise.all(statuses.map((status) => recordCrawlResult(status)));
+
   return { listings, statuses };
 }
 
@@ -246,7 +251,8 @@ async function crawlAdapter(
     status: "empty",
     searchedUrls: 0,
     discoveredUrls: 0,
-    parsedListings: 0
+    parsedListings: 0,
+    relevantListings: 0
   };
 
   if (adapter.platform === "İŞKUR") {
@@ -373,10 +379,13 @@ async function crawlAdapter(
       );
     }
 
-    const crawlStatus: PlatformCrawlStatus["status"] = listings.length
+    // Durum, KAYNAĞIN çalışıp çalışmadığını anlatır; ilgi filtresi bir arama
+    // kriteridir, kaynak arızası değildir. İkisi karıştırılırsa düzgün çalışan
+    // bir kaynak, yalnızca o aramaya uygun ilanı olmadığı için "bozuk" görünür.
+    const crawlStatus: PlatformCrawlStatus["status"] = parsed.length
       ? hitDeadline
         ? "timeout"
-        : listings.length < detailEntries.length
+        : parsed.length < detailEntries.length
         ? "partial"
         : "success"
       : hitDeadline
@@ -390,14 +399,17 @@ async function crawlAdapter(
         status: crawlStatus,
         searchedUrls: searchUrls.length,
         discoveredUrls: discoveredByUrl.size,
-        parsedListings: listings.length,
+        parsedListings: parsed.length,
+        relevantListings: listings.length,
         message: hitDeadline
           ? "Crawler süre sınırına ulaştı; eldeki ilanlarla devam edildi."
-          : listings.length
-          ? undefined
-          : discoveredByUrl.size
-            ? "İlan URL'leri bulundu ama detay sayfaları parse edilemedi."
-            : "Arama sayfasında gerçek ilan detay linki bulunamadı."
+          : parsed.length && !listings.length
+            ? `${parsed.length} ilan okundu ama hiçbiri bu aramayla ilgili değildi.`
+            : parsed.length
+              ? undefined
+              : discoveredByUrl.size
+                ? "İlan URL'leri bulundu ama detay sayfaları parse edilemedi."
+                : "Arama sayfasında gerçek ilan detay linki bulunamadı."
       }
     };
   } catch (error) {
