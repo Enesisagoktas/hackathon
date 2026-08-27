@@ -1,7 +1,17 @@
+import type mysql from "mysql2/promise";
 import { prepareApplicationsForResults, type PrepareApplicationsSummary } from "@/lib/apply/pipeline";
 import { evaluateCv, type CvEvaluation } from "@/lib/cv-evaluation";
 import { getCvById, getPrimaryCv, savePrimaryCv } from "@/lib/cv/store";
 import { getDbPool } from "@/lib/db";
+import {
+  applyStageUpdate,
+  createProgress,
+  parseProgress,
+  progressPercent,
+  type SearchCounters,
+  type StageKey,
+  type StageStatus
+} from "@/lib/jobs/progress";
 import { extractProfileFromCv, type AiExtractedProfile } from "@/lib/extract-keywords";
 import { ensureJobQueueSchema, parseJsonField, type JobSearchQueueRow, type QueuedFileType } from "@/lib/job-queue";
 import { searchJobListings } from "@/lib/job-search";
@@ -235,6 +245,8 @@ async function processClaimedJob(job: JobSearchQueueRow) {
       (searchNote ? " | not var" : "")
   );
   await pool.query("UPDATE job_searches SET progress = GREATEST(progress, 55), updated_at = NOW() WHERE id = ?", [job.id]);
+  await reportStage(job.id, "plan", "done", `${selectedPositions.length} pozisyon için arama planı hazır`);
+  await reportStage(job.id, "primary-search", "running", "Kaynaklar taranıyor");
 
   const searchPayload = await runWithJobHeartbeat(
     job.id,
@@ -265,12 +277,28 @@ async function processClaimedJob(job: JobSearchQueueRow) {
 
   const scoredResults = searchPayload.results.filter((result) => result.kind === "job");
 
+  await reportStage(job.id, "alternative-search", "done", "Alternatif pozisyonlar ve anahtar kelimeler tarandı");
+  await reportStage(job.id, "boutique-search", "done", "Butik ve şirket kaynakları tarandı");
+  await reportStage(job.id, "verify", "running", "İlan sayfaları açılıp doğrulanıyor", {
+    found: scoredResults.length
+  });
+
   // Başvuru üretmeden ÖNCE ilanların hâlâ yayında olduğunu doğrula.
   // Cache'teki bir ilan kapanmış olabilir; doğrulamadan devam edersek kapalı
   // ilana özel CV + ön yazı üretilir, hatta e-posta varsa otomatik gönderilir.
   const { alive, closedCount } = await dropClosedListings(scoredResults);
 
   const finalResults = alive;
+
+  await reportStage(job.id, "verify", "done", `${alive.length} ilan doğrulandı`, {
+    verified: alive.length,
+    eliminated: closedCount
+  });
+  await reportStage(job.id, "match", "done", "Uygunluk ve teknik analiz tamamlandı");
+  await reportStage(job.id, "rank", "done", `${finalResults.length} uygun ilan sıralandı`, {
+    eligible: finalResults.length
+  });
+
   const summary = {
     ...searchPayload.summary,
     resultCount: finalResults.length,
@@ -320,6 +348,41 @@ async function processClaimedJob(job: JobSearchQueueRow) {
  * kullanıcı ilanlarını görür. Oturumsuz (userId olmayan) bir kuyruk işi için
  * hiç çalışmaz — başvuru sahibi belli değilse kimse adına CV üretilmez.
  */
+/**
+ * §22 — Arama aşamasını ve canlı sayaçları kayda yazar.
+ *
+ * Yüzde, aşama durumlarından türetilir; ayrı bir sayaç tutulmaz. Hata durumunda
+ * sessizce geçilir: ilerleme göstergesi bir kolaylıktır, aramayı düşürmemeli.
+ */
+async function reportStage(
+  jobId: number,
+  key: StageKey,
+  status: StageStatus,
+  detail?: string,
+  counters?: Partial<SearchCounters>
+): Promise<void> {
+  try {
+    const pool = getDbPool();
+    const [rows] = await pool.query<mysql.RowDataPacket[]>(
+      "SELECT progress_stages FROM job_searches WHERE id = ? LIMIT 1",
+      [jobId]
+    );
+
+    const now = new Date().toISOString();
+    const current = parseProgress(rows[0]?.progress_stages, now) ?? createProgress(now);
+    const next = applyStageUpdate(current, { key, status, detail }, now, counters);
+
+    await pool.query(
+      `UPDATE job_searches
+         SET progress_stages = ?, progress = GREATEST(progress, ?), locked_at = NOW(), updated_at = NOW()
+       WHERE id = ?`,
+      [JSON.stringify(next), progressPercent(next), jobId]
+    );
+  } catch (error) {
+    console.warn(`[Worker] İlerleme yazılamadı (job ${jobId}):`, error instanceof Error ? error.message : error);
+  }
+}
+
 async function runApplyStage(
   job: JobSearchQueueRow,
   cvText: string,

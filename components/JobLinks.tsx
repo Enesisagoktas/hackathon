@@ -7,6 +7,7 @@ import type { CriteriaMatchResult, JobSearchResult, JobSearchSummary } from "@/l
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EligibilityBadge, EligibilityPanel } from "@/components/EligibilityPanel";
 import { cn } from "@/lib/utils";
 
 type JobLinksProps = {
@@ -112,6 +113,7 @@ function JobCard({ result }: { result: JobSearchResult }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <MatchScoreBadge score={result.matchScore} />
+            {result.eligibility ? <EligibilityBadge eligibility={result.eligibility} /> : null}
             <span className="text-xs text-slate-500">{result.platform}</span>
             {result.workMode ? <span className="text-xs text-slate-400">{result.workMode}</span> : null}
           </div>
@@ -151,6 +153,8 @@ function JobCard({ result }: { result: JobSearchResult }) {
               </ul>
             </div>
           ) : null}
+
+          {result.eligibility ? <EligibilityPanel eligibility={result.eligibility} /> : null}
 
           {result.criteriaMatch && result.criteriaMatch.criteria.length > 0 ? (
             <CriteriaBreakdown criteriaMatch={result.criteriaMatch} />

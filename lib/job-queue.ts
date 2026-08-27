@@ -137,6 +137,13 @@ async function doEnsureJobQueueSchema() {
     alters.push("ADD COLUMN selected_positions JSON NULL AFTER work_mode");
   }
 
+  // §22 — Arama sırasında kullanıcıya hangi aşamada olunduğunu ve canlı
+  // sayaçları göstermek için. Tek bir yüzde, 5 dakikalık bir aramada
+  // "sistem çalışıyor mu?" sorusunu cevaplamıyor.
+  if (!existing.has("progress_stages")) {
+    alters.push("ADD COLUMN progress_stages JSON NULL AFTER progress");
+  }
+
   if (!existing.has("seniority_filter")) {
     alters.push("ADD COLUMN seniority_filter VARCHAR(20) NULL AFTER selected_positions");
   }

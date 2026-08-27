@@ -344,8 +344,17 @@ export function extractRoleRequirements(listing: ListingTextInput): RoleRequirem
     .filter(Boolean)
     .join("\n");
 
+  // Gürültü ÖNCE elenir, geri düşüş kararı SONRA verilir.
+  //
+  // Ölçüm: bazı ilanlarda "aranan nitelikler" alanına sayfanın JavaScript'i
+  // düşüyor ("qualifications:{isLoading:a,..."). Eskiden bu alan dolu sayıldığı
+  // için açıklamaya geri düşülmüyordu; gürültü elenince geriye hiç şart
+  // kalmıyor ve teknik uyumun üç bileşeni birden "ilanda belirtilmemiş"
+  // durumuna düşüp ilan kör değerlendiriliyordu.
+  const usableRequirementLines = requirementLines.filter((line) => !looksLikeCodeNoise(line));
+
   const { required, preferred } = splitRequirementLines(
-    requirementLines.length ? requirementLines : [listing.description]
+    usableRequirementLines.length ? usableRequirementLines : [listing.description]
   );
 
   const employmentType = detectEmploymentType(`${listing.title}\n${listing.description}`);

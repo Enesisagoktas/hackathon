@@ -1,6 +1,8 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { SearchProgressPanel } from "@/components/SearchProgress";
+import type { SearchProgress as SearchProgressData } from "@/lib/jobs/progress";
 import { useParams, useRouter } from "next/navigation";
 import { AlertCircle, Loader2, Search, Sparkles } from "lucide-react";
 
@@ -24,6 +26,8 @@ type SearchState = {
   } | null;
   suggestedPositions?: string[];
   selectedPositions?: string[];
+  /** §22 — Aşama listesi ve canlı sayaçlar. */
+  progressStages?: SearchProgressData | null;
 };
 
 const SENIORITY_OPTIONS: Array<{ value: string; label: string }> = [
@@ -227,6 +231,7 @@ export default function AnalysisPage() {
               title="İlanlar aranıyor"
               description="Cache taranıyor; yeterli ilan yoksa platformlardan canlı tarama yapılıyor ve her uygun ilan için CV'n yeniden yazılıyor. Bu birkaç dakika sürebilir — sekmeyi kapatma."
               progress={state?.progress ?? 50}
+              stages={state?.progressStages}
             />
           ) : null}
 
@@ -355,7 +360,17 @@ export default function AnalysisPage() {
   );
 }
 
-function ProgressCard({ title, description, progress }: { title: string; description: string; progress: number }) {
+function ProgressCard({
+  title,
+  description,
+  progress,
+  stages
+}: {
+  title: string;
+  description: string;
+  progress: number;
+  stages?: SearchProgressData | null;
+}) {
   const safeProgress = Math.max(5, Math.min(100, progress));
 
   return (
@@ -375,6 +390,12 @@ function ProgressCard({ title, description, progress }: { title: string; descrip
           />
         </div>
         <p className="mt-2 text-right text-xs text-slate-500">%{safeProgress}</p>
+
+        {stages ? (
+          <div className="mt-4 border-t pt-4">
+            <SearchProgressPanel progress={stages} />
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );

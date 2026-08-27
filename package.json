@@ -21,8 +21,9 @@
     "test:recipient": "tsx scripts/test-recipient.ts",
     "test:requirements": "tsx scripts/test-requirement-parser.ts",
     "test:eligibility": "tsx scripts/test-eligibility.ts",
+    "test:progress": "tsx scripts/test-progress.ts",
     "audit:eligibility": "tsx scripts/audit-eligibility.ts",
-    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search && npm run test:requirements && npm run test:eligibility"
+    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search && npm run test:requirements && npm run test:eligibility && npm run test:progress"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

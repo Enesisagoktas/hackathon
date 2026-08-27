@@ -166,5 +166,27 @@ check("Eğitim şartı uydurulmaz", bare.education.length === 0);
 check("Mezuniyet zorunlu sayılmaz", bare.requiresGraduate === false);
 check("Düşük güven raporlanır", bare.extractedFields === 0, `${bare.extractedFields} alan`);
 
+
+// ── Ek: gürültülü "aranan nitelikler" alanında açıklamaya geri düşme ──────
+console.log("\n11) Bozuk nitelik alanı → açıklamaya geri düşer (gerçek kayıt)");
+const noisyListing = extractRoleRequirements({
+  title: "Arayüz Yazılım Uzmanı",
+  description:
+    "React ve TypeScript ile arayüz geliştirecek takım arkadaşı arıyoruz. JavaScript bilgisi zorunludur.",
+  // Veritabanındaki gerçek bozuk kayıt: sayfanın JavaScript'i bu alana düşmüş.
+  requirements: ["qualifications:{isLoading:a,isActive:b,isViewActive:b,isReviewActive:b,callOnStart:b,i"],
+  candidateCriteria: ["Tecrübe En az 3 yıl tecrübeli"]
+});
+check(
+  "JS gürültüsüne rağmen şart çıkarıldı",
+  noisyListing.requiredSkills.length > 0,
+  `${noisyListing.requiredSkills.length} zorunlu madde`
+);
+check(
+  "Şartlar açıklamadan geldi",
+  noisyListing.requiredSkills.some((line) => /React|TypeScript|JavaScript/i.test(line))
+);
+check("Kriter bloğu yine de okundu", noisyListing.minYears === 3);
+
 console.log(`\n═══ Sonuç: ${passed} geçti, ${failed} kaldı ═══\n`);
 if (failed > 0) process.exitCode = 1;

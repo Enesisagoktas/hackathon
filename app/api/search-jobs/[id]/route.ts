@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { parseProgress } from "@/lib/jobs/progress";
 import { getDbPool } from "@/lib/db";
 import { ensureJobQueueSchema, parseJsonField } from "@/lib/job-queue";
 import { ensureJobWorkerRunning } from "@/lib/job-worker";
@@ -25,7 +26,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
     const [rows] = await pool.query<mysql.RowDataPacket[]>(
       `SELECT status, progress, started_at, completed_at, error_message, locked_at, updated_at,
               user_id, ai_profile, evaluation, summary, results, apply_summary,
-              selected_positions, seniority_filter, search_note
+              selected_positions, seniority_filter, search_note, progress_stages
        FROM job_searches
        WHERE id = ?`,
       [searchId]
@@ -66,7 +67,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
       const [freshRows] = await pool.query<mysql.RowDataPacket[]>(
         `SELECT status, progress, started_at, completed_at, error_message, locked_at, updated_at,
                 user_id, ai_profile, evaluation, summary, results, apply_summary,
-                selected_positions, seniority_filter, search_note
+                selected_positions, seniority_filter, search_note, progress_stages
          FROM job_searches
          WHERE id = ?`,
         [searchId]
@@ -96,7 +97,9 @@ export async function GET(request: Request, { params }: { params: { id: string }
       suggestedPositions: buildSuggestedPositions(aiProfile),
       selectedPositions: parseJsonField(row.selected_positions, []),
       seniorityFilter: row.seniority_filter ?? "any",
-      searchNote: row.search_note ?? null
+      searchNote: row.search_note ?? null,
+      // §22 — Aramada hangi aşamada olunduğu ve canlı sayaçlar.
+      progressStages: parseProgress(row.progress_stages, new Date().toISOString())
     });
     
   } catch (error) {
