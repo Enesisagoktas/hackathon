@@ -155,13 +155,44 @@ export function generateJobSearchResults(input: SearchJobsInput): JobSearchRespo
   };
 }
 
+export type SearchJobListingsOptions = {
+  /**
+   * Cache yeterli aday üretemezse canlı crawler'ı devreye sokar.
+   * Yalnızca worker akışında açılır: HTTP isteği içinde dakikalarca süren
+   * tarama çalıştırmak zaman aşımına yol açar.
+   */
+  allowLiveCrawl?: boolean;
+};
+
+// AI skorlaması bu sayının altında ALAKALI ilan bulursa canlı tarama devreye girer.
+const LIVE_CRAWL_MIN_RESULTS = Number(process.env.LIVE_CRAWL_MIN_RESULTS ?? 5);
+
 /**
- * Cache-first job matching. This is the function the user-facing flow calls.
- * It reads active listings from the DB cache and scores them with AI.
- * It NEVER triggers the live crawler — crawling happens only in the background
- * via `npm run crawl:jobs`.
+ * Arama notundaki dolgu kelimeler. Bunlar hiçbir ilanı ayırt etmez ama
+ * anahtar kelime listesinde yer kaplayıp gerçek sinyalleri (beceri, sektör)
+ * geri iter.
  */
-export async function searchJobListings(input: SearchJobsInput): Promise<JobSearchResponse> {
+const NOTE_STOPWORDS = new Set([
+  "istiyorum", "isterim", "istemiyorum", "lütfen", "olsun", "olsun.", "tercih",
+  "ederim", "çalışmak", "çalışabilirim", "çalışırım", "yakınında", "civarında",
+  "öncelikli", "öncelik", "ağırlıklı", "şirketleri", "şirket", "firma",
+  "firmalar", "pozisyon", "pozisyonlar", "pozisyonlara", "olabilir", "gerek",
+  "gerekiyor", "mümkün", "bence", "ayrıca", "özellikle", "biraz", "sadece",
+  "yapabilirim", "yapmak", "arıyorum", "bakıyorum", "değil", "daha", "kadar",
+  "için", "veya", "hem", "diye", "gibi"
+]);
+
+/**
+ * Cache-first job matching: önce DB cache'inden aday toplar, AI ile skorlar.
+ * `allowLiveCrawl` açıksa ve cache hedef role dair yeterli aday veremiyorsa
+ * (ör. hemşire CV'sine karşılık cache'te sadece yazılım ilanı varsa) canlı
+ * crawler çalıştırılır, bulunan güncel ilanlar cache'e yazılır ve arama
+ * tazelenmiş cache üzerinden tekrarlanır.
+ */
+export async function searchJobListings(
+  input: SearchJobsInput,
+  options: SearchJobListingsOptions = {}
+): Promise<JobSearchResponse> {
   const profile = buildCandidateProfile(input, "Genel aday profili");
   const baseSummary: JobSearchSummary = {
     targetRole: profile.targetRole,
@@ -175,9 +206,39 @@ export async function searchJobListings(input: SearchJobsInput): Promise<JobSear
   };
 
   try {
+    // 1. Tur: cache'teki adaylar AI ile skorlanır.
     const candidates = await searchCachedListings(profile);
+    const firstRound = candidates.length
+      ? await scoreListingsWithAi(candidates, profile)
+      : { results: [] as JobSearchResult[], evaluatedUrls: new Set<string>() };
 
-    if (candidates.length === 0) {
+    let results = sortResults(firstRound.results);
+    let liveCrawlNote = "";
+    let totalCandidates = candidates.length;
+
+    // 2. Tur: ALAKALI sonuç azsa canlı tarama.
+    //
+    // Tetik bilinçli olarak aday sayısına değil SONUÇ sayısına bakar: cache,
+    // "İngilizce" gibi genel kelimelerle alakasız adaylar döndürebilir; AI
+    // bunların hepsini eler ve elde 0 ilan kalır. Ölçülen gerçek ihtiyaç
+    // "kaç aday bulundu" değil "kaç uygun ilan çıktı"dır.
+    if (options.allowLiveCrawl && results.length < LIVE_CRAWL_MIN_RESULTS) {
+      liveCrawlNote = await runLiveCrawl(profile);
+
+      // Tekrar skorlanmayacaklar YALNIZCA AI'nın fiilen karar verdikleridir.
+      // Burada tüm 1. tur adaylarını elemek hatalı olur: batch'i çöktüğü için
+      // hiç değerlendirilememiş ilanlar kalıcı olarak listeden düşerdi.
+      const refreshed = await searchCachedListings(profile);
+      const pending = refreshed.filter((candidate) => !firstRound.evaluatedUrls.has(candidate.url));
+      totalCandidates = candidates.length + pending.filter((candidate) => !candidates.some((c) => c.url === candidate.url)).length;
+
+      if (pending.length) {
+        const secondRound = await scoreListingsWithAi(pending, profile);
+        results = sortResults(mergeResultsByUrl(results, secondRound.results));
+      }
+    }
+
+    if (results.length === 0) {
       return {
         results: [],
         fallbackResults: [],
@@ -185,15 +246,12 @@ export async function searchJobListings(input: SearchJobsInput): Promise<JobSear
           ...baseSummary,
           errorType: "no_match",
           sourceNote:
-            "Veritabanı cache'inde uygun aktif ilan bulunamadı. Arka planda `npm run seed:jobs` veya `npm run crawl:jobs` ile cache doldurulabilir."
+            (totalCandidates
+              ? `${totalCandidates} aday ilan değerlendirildi ancak "${profile.targetRole}" profiline yeterince uyan ilan bulunamadı.`
+              : `"${profile.targetRole}" için uygun aktif ilan bulunamadı.`) + liveCrawlNote
         }
       };
     }
-
-    const scored = await scoreListingsWithAi(candidates, profile);
-    const results = scored
-      .filter((result) => result.kind === "job")
-      .sort((left, right) => right.matchScore - left.matchScore);
 
     return {
       results,
@@ -202,8 +260,8 @@ export async function searchJobListings(input: SearchJobsInput): Promise<JobSear
         ...baseSummary,
         resultCount: results.length,
         realJobCount: results.length,
-        errorType: results.length ? "none" : "no_match",
-        sourceNote: buildCacheSourceNote(results.length, candidates.length)
+        errorType: "none",
+        sourceNote: buildCacheSourceNote(results.length, totalCandidates) + liveCrawlNote
       }
     };
   } catch (error) {
@@ -221,6 +279,71 @@ export async function searchJobListings(input: SearchJobsInput): Promise<JobSear
       }
     };
   }
+}
+
+/**
+ * Canlı crawler'ı çalıştırır, bulunan ilanları cache'e yazar.
+ * Hata tüm aramayı düşürmez; kullanıcıya not olarak yansır.
+ */
+async function runLiveCrawl(profile: CandidateProfile): Promise<string> {
+  try {
+    console.log(
+      `[searchJobListings] Cache'te "${profile.targetRole}" için yeterli aday yok; canlı tarama başlıyor...`
+    );
+
+    const { crawlJobs } = await import("@/lib/jobs/crawler");
+    const { upsertJobListing } = await import("@/lib/jobs/repository");
+    const crawlResult = await crawlJobs(profile);
+
+    let saved = 0;
+    for (const listing of crawlResult.listings) {
+      try {
+        await upsertJobListing({
+          sourceName: listing.platform,
+          sourceCategory: listing.category,
+          externalId: listing.externalId,
+          title: listing.title,
+          company: listing.company,
+          location: listing.location,
+          workMode: listing.workMode ?? null,
+          description: listing.description,
+          requirements: listing.requirements,
+          candidateCriteria: listing.candidateCriteria,
+          postedAt: listing.postedAt ?? null,
+          sourceQuery: listing.sourceQuery,
+          externalUrl: listing.url,
+          parseStatus: "parsed",
+          markChecked: true
+        });
+        saved += 1;
+      } catch (error) {
+        console.error("[searchJobListings] Canlı ilan cache'e yazılamadı:", error);
+      }
+    }
+
+    const okPlatforms = crawlResult.statuses.filter((status) => status.parsedListings > 0).length;
+    console.log(`[searchJobListings] Canlı tarama bitti: ${saved} ilan cache'e eklendi (${okPlatforms} platform).`);
+
+    return saved > 0
+      ? ` Canlı taramayla ${saved} güncel ilan eklendi.`
+      : " Canlı tarama yapıldı ancak platformlardan yeni ilan alınamadı.";
+  } catch (error) {
+    console.error("[searchJobListings] Canlı tarama hata verdi:", error);
+    return " Canlı tarama bu turda tamamlanamadı.";
+  }
+}
+
+/** Sonuçları puana göre sıralar (kind=job filtreli). */
+function sortResults(results: JobSearchResult[]): JobSearchResult[] {
+  return results
+    .filter((result) => result.kind === "job")
+    .sort((left, right) => right.matchScore - left.matchScore);
+}
+
+/** İki sonuç kümesini URL bazında birleştirir; aynı ilan iki kez listelenmez. */
+function mergeResultsByUrl(first: JobSearchResult[], second: JobSearchResult[]): JobSearchResult[] {
+  const seen = new Set(first.map((result) => normalizeUrl(result.url)));
+  return [...first, ...second.filter((result) => !seen.has(normalizeUrl(result.url)))];
 }
 
 function buildCacheSourceNote(resultCount: number, candidateCount: number): string {
@@ -244,14 +367,29 @@ function buildCandidateProfile(input: SearchJobsInput, fallbackTargetRole: strin
   const locations = buildLocations(locationMode, cities, legacyLocation);
   const ai = input.aiProfile;
 
-  // Use AI-detected target positions if available
+  // Kullanıcının analiz sonrası seçtiği pozisyonlar her şeyin önüne geçer:
+  // hedef rol ve arama sorguları bu seçime hizalanır.
+  const selectedPositions = cleanTerms(input.selectedPositions ?? []).slice(0, 5);
   const aiTitles = cleanTerms(ai?.targetPositions ?? []);
-  const allTitles = unique([...titles, ...aiTitles]).slice(0, 8);
-  const targetRole = allTitles[0] ?? inferTitleForSearch([...skills, ...searchKeywords]) ?? fallbackTargetRole;
+  const allTitles = unique([...selectedPositions, ...titles, ...aiTitles]).slice(0, 8);
+  const targetRole =
+    selectedPositions[0] ?? allTitles[0] ?? inferTitleForSearch([...skills, ...searchKeywords]) ?? fallbackTargetRole;
 
   // Merge AI query variations with standard keywords
   const aiQueryVariations = cleanTerms(ai?.queryVariations ?? []);
+  // Kullanıcının notundaki anlamlı kelimeler cache aramasında ve ucuz
+  // ön-skorda da sinyal olur (AI skorlaması notun tamamını ayrıca görür).
+  //
+  // Durak kelimeler elenmezse "çalışmak istiyorum lütfen" gibi ifadeler
+  // keywords listesinin BAŞINA geçip gerçek beceri sinyallerini bastırıyordu.
+  const noteTerms =
+    typeof input.searchNote === "string"
+      ? cleanTerms(input.searchNote.split(/[\s,;.!?]+/))
+          .filter((term) => term.length >= 4 && !NOTE_STOPWORDS.has(term.toLocaleLowerCase("tr-TR")))
+          .slice(0, 8)
+      : [];
   const keywords = unique([
+    ...noteTerms,
     ...searchKeywords,
     ...skills,
     ...allTitles,
@@ -273,6 +411,11 @@ function buildCandidateProfile(input: SearchJobsInput, fallbackTargetRole: strin
     locationMode,
     workMode,
     fullText: input.fullText,
+    desiredSeniority:
+      typeof input.seniorityFilter === "string" && input.seniorityFilter !== "any"
+        ? input.seniorityFilter
+        : undefined,
+    searchNote: typeof input.searchNote === "string" && input.searchNote.trim() ? input.searchNote.trim().slice(0, 600) : undefined,
     cvSummary: ai?.cvSummary,
     queryVariations: aiQueryVariations,
     seniority: ai?.seniority,

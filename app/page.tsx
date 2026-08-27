@@ -1,15 +1,20 @@
-import { CvUpload } from "@/components/CvUpload";
+"use client";
+
+import { useState } from "react";
+
+import { AccountConsent, type RegisteredUser } from "@/components/AccountConsent";
+import { FLOW_STEPS, StepBar } from "@/components/StepBar";
+import { UploadCard } from "@/components/UploadCard";
 
 /**
- * Tek kolonlu, sade kabuk.
+ * Adım 1-2: Giriş ve CV yükleme.
  *
- * Eskiden burada iki kolonlu bir yerleşim vardı: solda pazarlama metni, dört
- * adet "nasıl çalışır" kartı ve uzun bir gizlilik kartı; sağda ise gerçek
- * uygulama. Bu kartlar altındaki akışı zaten tekrar ettiği için sayfa 6,6 ekran
- * boyuna çıkıyordu. Artık akışın kendisi adım adım ilerliyor, açıklamaya gerek
- * kalmıyor.
+ * Akış sayfalara bölündü: yükleme kuyruğa girince kullanıcı /analiz/[id]
+ * sayfasına geçer (skor + pozisyon seçimi), oradan /basvurular sayfasına.
  */
 export default function Home() {
+  const [user, setUser] = useState<RegisteredUser | null>(null);
+
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f8fafc_0%,#f1f7f6_100%)]">
       <div className="container max-w-3xl py-8 md:py-12">
@@ -21,7 +26,13 @@ export default function Home() {
           </p>
         </header>
 
-        <CvUpload />
+        <div className="space-y-4">
+          <StepBar current={user ? 2 : 1} steps={FLOW_STEPS} />
+
+          <AccountConsent onUserChange={setUser} />
+
+          {user ? <UploadCard /> : null}
+        </div>
 
         <footer className="mt-10 border-t pt-4 text-xs leading-5 text-slate-500">
           CV metnin hesabına bağlı olarak saklanır, istediğin an silebilirsin. Uyarlanan CV&apos;ye sende olmayan

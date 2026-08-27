@@ -183,8 +183,13 @@ function buildCrawlQueries(profile: CandidateProfile) {
   const primaryKeyword = profile.keywords.find((keyword) => !profile.skills.includes(keyword));
   const location = profile.locationMode === "cities" ? profile.locations[0] : undefined;
 
+  // Seviye filtresi sorgulara da yansır: "stajyer hemşire" gibi aramalar
+  // platformlarda doğrudan seviyeye uygun ilanları öne çıkarır.
+  const seniorityTerm = getSeniorityQueryTerm(profile.desiredSeniority);
+
   const standardQueries = [
     profile.targetRole,
+    joinQuery([seniorityTerm, profile.targetRole]),
     joinQuery([profile.targetRole, primarySkill]),
     joinQuery([profile.targetRole, primarySkill, secondarySkill]),
     joinQuery([profile.targetRole, primaryKeyword]),
@@ -197,9 +202,12 @@ function buildCrawlQueries(profile: CandidateProfile) {
 
   // Add alternative titles as queries
   const titleQueries = profile.titles.slice(1, 4);
+  const seniorityTitleQueries = seniorityTerm
+    ? profile.titles.slice(1, 3).map((title) => joinQuery([seniorityTerm, title]))
+    : [];
 
   // Combine all queries, deduplicate, limit
-  const allQueries = [...standardQueries, ...aiQueries, ...titleQueries];
+  const allQueries = [...standardQueries, ...seniorityTitleQueries, ...aiQueries, ...titleQueries];
 
   return uniq(allQueries.filter((query) => query.length >= 3))
     .slice(0, 10); // Increased from 5 to 10 for richer coverage
@@ -725,6 +733,21 @@ function uniqListings(listings: CrawledJobListing[]) {
     seen.add(key);
     return true;
   });
+}
+
+/** Seviye filtresini platform arama terimlerine çevirir. */
+function getSeniorityQueryTerm(desiredSeniority: string | undefined): string | undefined {
+  switch (desiredSeniority) {
+    case "stajyer":
+      return "stajyer";
+    case "junior":
+      return "junior";
+    case "senior":
+      return "senior";
+    default:
+      // "mid" için platformlarda yerleşik bir arama terimi yok; sorguyu kirletme.
+      return undefined;
+  }
 }
 
 function joinQuery(parts: Array<string | undefined>) {

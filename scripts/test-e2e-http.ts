@@ -136,28 +136,65 @@ async function run() {
     return;
   }
 
-  // ── 5. Worker'ı bekle ──────────────────────────────────────────────────
-  console.log("\n5) Worker işliyor (analiz → eşleştirme → CV uyarlama)");
+  // ── 5. Aşama 1: analiz ve pozisyon önerileri ───────────────────────────
+  console.log("\n5) Aşama 1 — CV analizi (worker)");
   const searchId = upload.body.searchId;
-  const startedAt = Date.now();
   let status: Record<string, any> = {};
-  let lastProgress = -1;
 
-  while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
-    const poll = await callJson(`/api/search-jobs/${searchId}`);
-    status = poll.body;
+  const pollUntil = async (targets: string[], label: string) => {
+    const startedAt = Date.now();
+    let lastProgress = -1;
 
-    if (status.progress !== lastProgress) {
-      console.log(`  ... durum=${status.status} ilerleme=%${status.progress}`);
-      lastProgress = status.progress;
+    while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+      const poll = await callJson(`/api/search-jobs/${searchId}`);
+      status = poll.body;
+
+      if (status.progress !== lastProgress) {
+        console.log(`  ... [${label}] durum=${status.status} ilerleme=%${status.progress}`);
+        lastProgress = status.progress;
+      }
+
+      if (targets.includes(status.status) || status.status === "failed") {
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
+  };
 
-    if (status.status === "completed" || status.status === "failed") {
-      break;
-    }
+  await pollUntil(["awaiting_selection"], "analiz");
 
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
+  check(
+    "Analiz bitti ve pozisyon seçimi bekleniyor",
+    status.status === "awaiting_selection",
+    `${status.status} — ${status.errorMessage ?? "hata yok"}`
+  );
+  check(
+    "AI en güçlü pozisyonları önerdi",
+    (status.suggestedPositions?.length ?? 0) >= 1,
+    (status.suggestedPositions ?? []).join(", ")
+  );
+
+  // ── 5b. Aşama 2: pozisyon seçimi + not + seviye ────────────────────────
+  console.log("\n5b) Aşama 2 — pozisyon seçimi ve arama");
+
+  const chosenPositions = (status.suggestedPositions ?? []).slice(0, 2);
+  const selectRes = await callJson(`/api/search-jobs/${searchId}/select`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      positions: chosenPositions,
+      seniority: "any",
+      note: "React ve Next.js ağırlıklı pozisyonlara öncelik ver. Uzaktan çalışma tercihimdir."
+    })
+  });
+
+  check("Pozisyon seçimi kabul edildi", selectRes.response.ok, selectRes.body.message);
+
+  const positionsEcho = selectRes.body.positions ?? [];
+  check("Seçilen pozisyonlar kaydedildi", positionsEcho.length === chosenPositions.length, positionsEcho.join(", "));
+
+  await pollUntil(["completed"], "arama");
 
   check("Arama tamamlandı", status.status === "completed", `${status.status} — ${status.errorMessage ?? "hata yok"}`);
   check("AI profil üretildi", Boolean(status.aiProfile), `${status.aiProfile?.skills?.length ?? 0} beceri`);

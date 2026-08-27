@@ -13,9 +13,8 @@ import type {
 } from "@/lib/jobs/types";
 
 const SOURCE_CATEGORIES = new Set<JobResultCategory>(["general", "tech", "public"]);
-const BROAD_LIMIT = 100;
-const MIN_CANDIDATES = 15;
-const TOPUP_LIMIT = 60;
+const BROAD_LIMIT = 150;
+const TOPUP_LIMIT = 30;
 
 export type JobSourceRow = mysql.RowDataPacket & {
   id: number;
@@ -254,8 +253,11 @@ export async function searchActiveListings(profile: CandidateProfile): Promise<J
     }
   }
 
-  // Guarantee a usable candidate pool even if the profile terms matched little.
-  if (byId.size < MIN_CANDIDATES) {
+  // Profil terimleri HİÇBİR ilanla eşleşmediyse AI'nın değerlendirmesi için
+  // küçük bir güncel havuz verilir; AI alakasızları zaten 0-15 puanla eler.
+  // Eskiden bu dolgu "en az 15 aday" garantisiyle her aramada çalışıyordu ve
+  // hemşire CV'sine ofis ilanları buradan sızıyordu.
+  if (byId.size === 0) {
     const [rows] = await pool.query<mysql.RowDataPacket[]>(
       `${BASE_SELECT}
        WHERE l.status = 'active'

@@ -1,8 +1,11 @@
+"use client";
+
+import { useState } from "react";
 import { ExternalLink, Loader2, SearchCheck } from "lucide-react";
 
-import type { CriteriaMatchResult, JobResultCategory, JobSearchResult, JobSearchSummary } from "@/lib/job-search";
+import type { CriteriaMatchResult, JobSearchResult, JobSearchSummary } from "@/lib/job-search";
 import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
@@ -11,45 +14,27 @@ type JobLinksProps = {
   fallbackResults?: JobSearchResult[];
   summary: JobSearchSummary | null;
   isLoading?: boolean;
+  /**
+   * Arama tamamlandı ve sonuç 0 ise sebebi açıklayan bir kutu gösterilir.
+   * Sayfa ilk açıldığında (henüz arama yokken) hiçbir şey çizilmez.
+   */
+  searchCompleted?: boolean;
 };
 
-const CATEGORY_ORDER: JobResultCategory[] = ["recommended", "general", "tech", "public"];
+export function JobLinks({
+  results,
+  fallbackResults = [],
+  summary,
+  isLoading = false,
+  searchCompleted = false
+}: JobLinksProps) {
+  // Uzun listeler sayfayı şişirmesin: 6'şar göster.
+  const [visibleCount, setVisibleCount] = useState(6);
 
-const CATEGORY_META: Record<JobResultCategory, { title: string; description: string; badge: string }> = {
-  recommended: {
-    title: "En Uygun Gerçek İlanlar",
-    description: "Detay sayfası parse edilen ve CV ile en güçlü örtüşen ilanlar.",
-    badge: "border-teal-200 bg-teal-50 text-teal-700"
-  },
-  general: {
-    title: "Genel İş Platformlarından İlanlar",
-    description: "Kariyer.net, Secretcv, Eleman.net ve Yenibiriş gibi kaynaklardan parse edilen ilanlar.",
-    badge: "border-slate-200 bg-slate-50 text-slate-700"
-  },
-  tech: {
-    title: "Teknoloji ve Startup İlanları",
-    description: "Toptalent ve Webrazzi Jobs gibi niş platformlardan gelen gerçek ilanlar.",
-    badge: "border-teal-200 bg-teal-50 text-teal-700"
-  },
-  public: {
-    title: "Kamusal Kaynaklar",
-    description: "İŞKUR gibi kaynaklardan parse edilebilen ilanlar.",
-    badge: "border-blue-200 bg-blue-50 text-blue-700"
-  }
-};
-
-const CONFIDENCE_LABELS: Record<JobSearchResult["confidence"], string> = {
-  high: "Yüksek güven",
-  medium: "Orta güven",
-  low: "Manuel arama"
-};
-
-export function JobLinks({ results, fallbackResults = [], summary, isLoading = false }: JobLinksProps) {
   if (!results.length) {
-    // Söyleyecek bir şey yokken kutu çizme. Eskiden burada "sonuçlar burada
-    // görünecek" yazan boş bir kart vardı ve daha ilk açılışta ekranı
-    // gereksiz yere kalabalıklaştırıyordu.
-    if (!isLoading && !fallbackResults.length) {
+    // Söyleyecek bir şey yokken kutu çizme — ama arama BİTTİYSE ve sonuç
+    // çıkmadıysa sessiz kalma: kullanıcı neden boş olduğunu bilmeli.
+    if (!isLoading && !fallbackResults.length && !searchCompleted) {
       return null;
     }
 
@@ -61,11 +46,19 @@ export function JobLinks({ results, fallbackResults = [], summary, isLoading = f
             Eşleşen ilanlar
           </CardTitle>
           <CardDescription>
-            {isLoading
-              ? "İlanlar CV'nize göre değerlendiriliyor."
-              : summary?.sourceNote ?? "Uygun ilan bulunamadı."}
+            {isLoading ? "İlanlar CV'nize göre değerlendiriliyor." : summary?.sourceNote ?? "Uygun ilan bulunamadı."}
           </CardDescription>
         </CardHeader>
+        {!isLoading && searchCompleted ? (
+          <CardContent className="text-sm leading-6 text-slate-600">
+            <p>Deneyebileceklerin:</p>
+            <ul className="mt-1.5 list-disc space-y-1 pl-5">
+              <li>Farklı veya daha genel bir pozisyon seç.</li>
+              <li>Seviye filtresini &quot;Fark etmez&quot; yap.</li>
+              <li>Lokasyonu &quot;Tüm Türkiye&quot; olarak genişlet.</li>
+            </ul>
+          </CardContent>
+        ) : null}
         {fallbackResults.length ? (
           <CardContent>
             <FallbackSearches results={fallbackResults} />
@@ -75,70 +68,28 @@ export function JobLinks({ results, fallbackResults = [], summary, isLoading = f
     );
   }
 
-  const groupedLinks = CATEGORY_ORDER.map((category) => ({
-    category,
-    links: results.filter((result) => result.category === category)
-  })).filter((group) => group.links.length);
-
   return (
-    <Card className="bg-white/90 shadow-soft">
+    <Card className="bg-white/90 shadow-sm">
       <CardHeader>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <CardTitle className="text-xl">CV&apos;ye Uygun Gerçek İlanlar</CardTitle>
-            <CardDescription className="mt-2">
-              {summary
-                ? `${summary.targetRole ?? "Hedef rol"} hedef rolü için ${summary.resultCount ?? results.length} gerçek ilan CV uyumuna göre sıralandı.`
-                : "Detay sayfası parse edilen ilanlar seçilen lokasyon ve çalışma modeline göre skorlandı."}
-            </CardDescription>
-          </div>
-          {summary ? (
-            <div className="rounded-2xl border bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              <p className="font-semibold text-slate-950">{summary.workMode ?? "Çalışma modeli fark etmez"}</p>
-              <p>{summary.locations?.length ? summary.locations.join(", ") : "Tüm Türkiye"}</p>
-            </div>
-          ) : null}
-        </div>
+        <CardTitle className="text-lg">Eşleşen ilanlar ({results.length})</CardTitle>
+        <CardDescription>
+          {summary?.sourceNote ?? "İlanlar CV uyumuna göre puanlanıp sıralandı."}
+        </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-5">
-        {groupedLinks.map((group) => {
-          const meta = CATEGORY_META[group.category];
+      <CardContent className="space-y-2.5">
+        {results.slice(0, visibleCount).map((result) => (
+          <JobCard key={result.id} result={result} />
+        ))}
 
-          return (
-            <section key={group.category} className="rounded-3xl border bg-slate-50/80 p-4">
-              <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <h3 className="font-semibold text-slate-950">{meta.title}</h3>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">{meta.description}</p>
-                </div>
-                <Badge className={cn("w-fit", meta.badge)} variant="outline">
-                  {group.links.length} ilan
-                </Badge>
-              </div>
-
-              <div className="grid gap-3">
-                {group.links.map((result) => (
-                  <JobCard key={result.id} result={result} />
-                ))}
-              </div>
-            </section>
-          );
-        })}
-
-        {summary ? (
-          <div className="space-y-3 rounded-2xl border border-dashed bg-slate-50 p-4 text-sm leading-6 text-slate-600">
-            <p>{summary.sourceNote ?? "Gerçek ilan detay linkleri CV uyumuna göre hazırlandı."}</p>
-            {summary.crawlStatuses?.length ? (
-              <div className="grid gap-2 md:grid-cols-2">
-                {summary.crawlStatuses.map((status) => (
-                  <div key={status.platform} className="rounded-xl bg-white px-3 py-2 text-xs text-slate-600">
-                    <span className="font-semibold text-slate-800">{status.platform}</span>: {status.discoveredUrls} link bulundu, {status.parsedListings} ilan parse edildi.
-                    {status.message ? <span className="block text-slate-400">{status.message}</span> : null}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
+        {results.length > visibleCount ? (
+          <Button
+            className="w-full"
+            type="button"
+            variant="ghost"
+            onClick={() => setVisibleCount((count) => count + 6)}
+          >
+            {results.length - visibleCount} ilan daha göster
+          </Button>
         ) : null}
 
         {fallbackResults.length ? <FallbackSearches results={fallbackResults} /> : null}
@@ -147,82 +98,68 @@ export function JobLinks({ results, fallbackResults = [], summary, isLoading = f
   );
 }
 
-// ─── Job Card with Criteria Match ───────────────────────────────────────────
-
+/**
+ * Kompakt ilan satırı: başlık, şirket·konum, puan ve tek eylem. Kriter analizi,
+ * öneri gerekçeleri gibi ikincil bilgiler "Detay" altında durur — eskiden her
+ * kartta hepsi açık geldiği için 5 ilan bile sayfayı ekranlarca uzatıyordu.
+ */
 function JobCard({ result }: { result: JobSearchResult }) {
+  const [expanded, setExpanded] = useState(false);
+
   return (
-    <div
-      className="rounded-2xl border bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-teal-200 hover:shadow-md"
-    >
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 flex-1 space-y-3">
+    <div className="rounded-2xl border bg-white shadow-sm transition hover:border-teal-200">
+      <div className="flex items-start justify-between gap-3 p-3.5">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge className="border-slate-200 bg-white text-slate-700" variant="outline">
-              {result.platform}
-            </Badge>
             <MatchScoreBadge score={result.matchScore} />
-            <Badge className="border-amber-200 bg-amber-50 text-amber-700" variant="outline">
-              {CONFIDENCE_LABELS[result.confidence]}
-            </Badge>
-            {result.criteriaMatch ? (
-              <Badge className="border-violet-200 bg-violet-50 text-violet-700" variant="outline">
-                Kriter: %{result.criteriaMatch.overallPercent}
-              </Badge>
-            ) : null}
+            <span className="text-xs text-slate-500">{result.platform}</span>
+            {result.workMode ? <span className="text-xs text-slate-400">{result.workMode}</span> : null}
           </div>
-          <div>
-            <h3 className="font-semibold text-slate-950">{result.title}</h3>
-            {result.company ? <p className="mt-1 text-sm font-medium text-slate-700">{result.company}</p> : null}
-            <p className="mt-1 text-sm leading-6 text-slate-500">{result.description}</p>
-          </div>
+          <p className="mt-1 truncate font-semibold text-slate-950">{result.title}</p>
+          <p className="truncate text-sm text-slate-500">
+            {[result.company, result.location].filter(Boolean).join(" · ") || "Şirket bilgisi ilanda"}
+          </p>
         </div>
-        <div className="flex shrink-0 flex-col items-end gap-2">
-          <MatchRing score={result.criteriaMatch?.overallPercent ?? result.matchScore} />
+
+        <div className="flex shrink-0 items-center gap-1.5">
           <a
-            className={cn(buttonVariants({ size: "sm", variant: "default" }), "shrink-0")}
+            className={cn(buttonVariants({ size: "sm", variant: "default" }))}
             href={result.url}
-            target="_blank"
             rel="noreferrer"
+            target="_blank"
           >
-            {result.actionLabel}
-            <ExternalLink className="ml-2 h-4 w-4" />
+            İlanı Aç
+            <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
           </a>
+          <Button size="sm" type="button" variant="ghost" onClick={() => setExpanded((open) => !open)}>
+            {expanded ? "Gizle" : "Detay"}
+          </Button>
         </div>
       </div>
 
-      {/* Criteria Breakdown */}
-      {result.criteriaMatch && result.criteriaMatch.criteria.length > 0 ? (
-        <CriteriaBreakdown criteriaMatch={result.criteriaMatch} />
-      ) : null}
+      {expanded ? (
+        <div className="space-y-3 border-t bg-slate-50/60 p-3.5">
+          <p className="text-sm leading-6 text-slate-600">{result.description}</p>
 
-      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Neden önerildi?</p>
-          <ul className="mt-2 grid gap-2 text-sm leading-6 text-slate-600 sm:grid-cols-2">
-            {result.matchReasons.map((reason) => (
-              <li key={reason} className="rounded-xl bg-slate-50 px-3 py-2">
-                {reason}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="rounded-2xl bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">
-          <span className="font-semibold text-slate-700">Kaynak sorgu:</span> {result.query}
-          <br />
-          <span className="font-semibold text-slate-700">İlan:</span> {result.location ?? "Lokasyon yok"} · {result.workMode ?? "Model yok"}
-          {result.matchedKeywords?.length ? (
-            <>
-              <br />
-              <span className="font-semibold text-slate-700">Eşleşen:</span> {result.matchedKeywords.slice(0, 5).join(", ")}
-            </>
+          {result.matchReasons.length ? (
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Neden önerildi?</p>
+              <ul className="mt-1.5 space-y-1 text-sm leading-6 text-slate-600">
+                {result.matchReasons.map((reason) => (
+                  <li key={reason}>• {reason}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {result.criteriaMatch && result.criteriaMatch.criteria.length > 0 ? (
+            <CriteriaBreakdown criteriaMatch={result.criteriaMatch} />
           ) : null}
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
-
-// ─── Criteria Breakdown Component ───────────────────────────────────────────
 
 function CriteriaBreakdown({ criteriaMatch }: { criteriaMatch: CriteriaMatchResult }) {
   const metCount = criteriaMatch.criteria.filter((c) => c.status === "met").length;
@@ -335,43 +272,6 @@ function MatchScoreBadge({ score }: { score: number }) {
 }
 
 // ─── Match Ring (SVG donut) ─────────────────────────────────────────────────
-
-function MatchRing({ score }: { score: number }) {
-  const radius = 22;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (score / 100) * circumference;
-
-  const color = score >= 75
-    ? "#10b981"
-    : score >= 50
-      ? "#0d9488"
-      : score >= 30
-        ? "#f59e0b"
-        : "#ef4444";
-
-  return (
-    <div className="relative flex h-14 w-14 items-center justify-center">
-      <svg className="match-ring h-14 w-14 -rotate-90" viewBox="0 0 52 52">
-        <circle cx="26" cy="26" r={radius} fill="none" stroke="#e2e8f0" strokeWidth="4" />
-        <circle
-          cx="26"
-          cy="26"
-          r={radius}
-          fill="none"
-          stroke={color}
-          strokeWidth="4"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          className="match-ring-progress"
-        />
-      </svg>
-      <span className="absolute text-xs font-bold text-slate-900">%{score}</span>
-    </div>
-  );
-}
-
-// ─── Fallback Searches ──────────────────────────────────────────────────────
 
 function FallbackSearches({ results }: { results: JobSearchResult[] }) {
   return (

@@ -2,6 +2,9 @@ import { Check } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
+/** Uygulamanın dört adımlı ana akışı; tüm sayfalar aynı diziyi kullanır. */
+export const FLOW_STEPS = ["Giriş", "CV yükle", "Pozisyon seç", "Başvurular"];
+
 export type StepBarProps = {
   /** 1 tabanlı geçerli adım. */
   current: number;

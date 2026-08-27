@@ -87,7 +87,9 @@ async function renderPdf(cv: TailoredCv, outputPath: string): Promise<void> {
       path: outputPath,
       format: "A4",
       printBackground: true,
-      margin: { top: "14mm", right: "14mm", bottom: "14mm", left: "14mm" }
+      // Kenar boşlukları şablonun kendi iç dolgusunda; başlık bandı ve yan
+      // panel sayfa kenarına kadar uzansın diye PDF marjı sıfırlanır.
+      margin: { top: "0", right: "0", bottom: "0", left: "0" }
     });
   } finally {
     await browser.close().catch(() => undefined);

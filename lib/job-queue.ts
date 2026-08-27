@@ -18,6 +18,9 @@ export type EnqueueJobSearchInput = {
   workMode: WorkMode;
 };
 
+/** Kullanıcının aradığı ilan seviyesi. */
+export type SeniorityFilter = "any" | "stajyer" | "junior" | "mid" | "senior";
+
 export type JobSearchQueueRow = mysql.RowDataPacket & {
   id: number;
   user_email: string | null;
@@ -31,6 +34,11 @@ export type JobSearchQueueRow = mysql.RowDataPacket & {
   ai_profile: unknown;
   evaluation: unknown;
   attempts: number | null;
+  /** Kullanıcının analiz sonrası seçtiği hedef pozisyonlar (JSON dizi). */
+  selected_positions: unknown;
+  seniority_filter: SeniorityFilter | null;
+  /** Kullanıcının aramaya not düştüğü 3-4 cümlelik serbest metin. */
+  search_note: string | null;
 };
 
 let schemaEnsurePromise: Promise<void> | null = null;
@@ -123,6 +131,29 @@ async function doEnsureJobQueueSchema() {
 
   if (!existing.has("apply_summary")) {
     alters.push("ADD COLUMN apply_summary JSON NULL AFTER summary");
+  }
+
+  if (!existing.has("selected_positions")) {
+    alters.push("ADD COLUMN selected_positions JSON NULL AFTER work_mode");
+  }
+
+  if (!existing.has("seniority_filter")) {
+    alters.push("ADD COLUMN seniority_filter VARCHAR(20) NULL AFTER selected_positions");
+  }
+
+  if (!existing.has("search_note")) {
+    alters.push("ADD COLUMN search_note VARCHAR(600) NULL AFTER seniority_filter");
+  }
+
+  // Akış artık iki aşamalı: analiz bitince iş 'awaiting_selection' durumunda
+  // durur, kullanıcı pozisyon seçince tekrar kuyruğa girer. Eski enum bu
+  // değeri tanımıyorsa genişlet (mevcut satırların değeri korunur).
+  const statusColumn = columns.find((column) => String(column.Field) === "status");
+  const statusType = statusColumn ? String(statusColumn.Type).toLocaleLowerCase("tr-TR") : "";
+  if (statusType && !statusType.includes("awaiting_selection")) {
+    alters.push(
+      "MODIFY COLUMN status ENUM('pending', 'processing', 'awaiting_selection', 'completed', 'failed') NOT NULL DEFAULT 'pending'"
+    );
   }
 
   if (alters.length) {

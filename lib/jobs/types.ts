@@ -73,6 +73,12 @@ export type SearchJobsInput = {
   fullText?: string;
   /** AI-extracted rich profile from CV evaluation */
   aiProfile?: AiCvProfile;
+  /** Kullanıcının analiz sonrası seçtiği hedef pozisyonlar; arama bunlara odaklanır. */
+  selectedPositions?: string[];
+  /** Aranan ilan seviyesi: any | stajyer | junior | mid | senior. */
+  seniorityFilter?: string;
+  /** Kullanıcının aramaya düştüğü kısa not; anahtar ifadeleri skorlama dikkate alır. */
+  searchNote?: string;
 };
 
 /** Rich profile extracted by AI from the full CV text */
@@ -186,6 +192,10 @@ export type CandidateProfile = {
   preferredRoles?: string[];
   /** Profession category */
   professionCategory?: string;
+  /** Kullanıcının aradığı ilan seviyesi (any ise kısıt yok). */
+  desiredSeniority?: string;
+  /** Kullanıcının arama notu; skorlama ve uyarlama bu ifadelere ağırlık verir. */
+  searchNote?: string;
 };
 
 export type CrawledJobListing = {

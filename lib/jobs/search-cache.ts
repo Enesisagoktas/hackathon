@@ -2,8 +2,10 @@ import { searchActiveListings } from "@/lib/jobs/repository";
 import { normalizeComparable } from "@/lib/jobs/normalize";
 import type { CandidateProfile, CrawledJobListing, JobListingRecord } from "@/lib/jobs/types";
 
-const MAX_PREFILTER = 30;
-const MAX_AI_CANDIDATES = 15;
+// Kullanıcı eşleşen aktif ilanların tamamını görmek istiyor; AI'ya giden
+// aday havuzu geniş tutulur (süre worker akışında sorun değil).
+const MAX_PREFILTER = Number(process.env.SEARCH_MAX_CANDIDATES ?? 60);
+const MAX_AI_CANDIDATES = Number(process.env.SEARCH_MAX_CANDIDATES ?? 60);
 const FRESH_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 export type ScoredListing = {

@@ -10,8 +10,14 @@ import type { JobSearchResult } from "@/lib/jobs/types";
 
 const IDLE_DELAY_MS = 5000;
 const HEARTBEAT_MS = readPositiveNumber(process.env.JOB_HEARTBEAT_MS, 5000);
-const SEARCH_TIMEOUT_MS = readPositiveNumber(process.env.JOB_SEARCH_TIMEOUT_MS, 90000);
+// Varsayılan, canlı taramayı da kapsayacak kadar geniş: crawler tek başına
+// CRAWLER_DEADLINE_MS (120sn) alabiliyor, öncesinde/sonrasında AI skorlama var.
+// Eski 90sn varsayılanı, .env'de değer tanımlı değilse canlı taramayı daha
+// bitmeden kesiyordu.
+const SEARCH_TIMEOUT_MS = readPositiveNumber(process.env.JOB_SEARCH_TIMEOUT_MS, 360000);
 const STALE_PROCESSING_MINUTES = readPositiveNumber(process.env.JOB_STALE_PROCESSING_MINUTES, 2);
+/** Bir iş bu kadar denemeden sonra kalıcı olarak 'failed' yapılır. */
+const MAX_JOB_ATTEMPTS = readPositiveNumber(process.env.JOB_MAX_ATTEMPTS, 4);
 
 let backgroundWorkerRunning = false;
 
@@ -48,11 +54,17 @@ export async function processNextJob() {
     return false;
   }
 
+  // Kalp atışı işin tamamını kapsar: analiz aşaması da dahil hiçbir pencere
+  // korumasız kalmaz, iş başkası tarafından "takılmış" sayılıp kapılamaz.
+  const stopHeartbeat = startJobHeartbeat(job.id);
+
   try {
     await processClaimedJob(job);
   } catch (error) {
     console.error(`[Worker] Job ${job.id} failed:`, error);
     await markJobFailed(job.id, error);
+  } finally {
+    stopHeartbeat();
   }
 
   return true;
@@ -65,14 +77,20 @@ async function claimNextJob(): Promise<JobSearchQueueRow | null> {
   try {
     await connection.beginTransaction();
 
+    // `attempts < MAX_ATTEMPTS`: worker sürecini çökerten bir iş (ör. bozuk CV
+    // metni) aksi halde sonsuz yeniden-kapma döngüsüne girer ve kuyruğu
+    // kilitler. Sınırı aşan işler aşağıda 'failed' yapılır.
     const [rows] = await connection.query<JobSearchQueueRow[]>(
       `SELECT *
        FROM job_searches
-       WHERE status = 'pending'
-          OR (status = 'processing' AND (locked_at IS NULL OR locked_at < DATE_SUB(NOW(), INTERVAL ${STALE_PROCESSING_MINUTES} MINUTE)))
+       WHERE attempts < ${MAX_JOB_ATTEMPTS}
+         AND (
+           status = 'pending'
+           OR (status = 'processing' AND (locked_at IS NULL OR locked_at < DATE_SUB(NOW(), INTERVAL ${STALE_PROCESSING_MINUTES} MINUTE)))
+         )
        ORDER BY
          CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
-         created_at DESC
+         created_at ASC
        LIMIT 1
        FOR UPDATE`
     );
@@ -80,6 +98,20 @@ async function claimNextJob(): Promise<JobSearchQueueRow | null> {
     const job = rows[0];
 
     if (!job) {
+      // Denemesi tükenmiş ama hâlâ 'pending'/'processing' görünen işleri
+      // kapat; aksi halde arayüzde sonsuza dek "işleniyor" kalırlar.
+      await connection.query(
+        `UPDATE job_searches
+         SET status = 'failed',
+             progress = 100,
+             completed_at = NOW(),
+             locked_at = NULL,
+             cv_text = NULL,
+             error_message = COALESCE(error_message, 'İşlem birkaç denemede tamamlanamadı.'),
+             updated_at = NOW()
+         WHERE attempts >= ${MAX_JOB_ATTEMPTS} AND status IN ('pending', 'processing')`
+      );
+
       await connection.commit();
       return null;
     }
@@ -110,7 +142,17 @@ async function claimNextJob(): Promise<JobSearchQueueRow | null> {
 }
 
 async function processClaimedJob(job: JobSearchQueueRow) {
-  const text = job.cv_text?.trim();
+  let text = job.cv_text?.trim();
+
+  // Tamamlanmış bir iş yeniden aranmak üzere kuyruğa dönebilir (kullanıcı
+  // pozisyon seçimini değiştirdi). Tamamlanınca cv_text temizlendiği için
+  // metin kayıtlı ana CV'den geri yüklenir.
+  if (!text && job.user_id != null) {
+    const storedCv =
+      (job.cv_id != null ? await getCvById(Number(job.cv_id), Number(job.user_id)) : null) ??
+      (await getPrimaryCv(Number(job.user_id)));
+    text = storedCv?.rawText?.trim();
+  }
 
   if (!text) {
     throw new Error("Bu kuyruk işinde CV metni bulunamadı.");
@@ -161,25 +203,61 @@ async function processClaimedJob(job: JobSearchQueueRow) {
     [JSON.stringify(evaluation), job.id]
   );
 
-  console.log(`[Worker] Job ${job.id} - Cache-first search + AI scoring...`);
+  // ── Aşama sınırı: pozisyon seçimi ──────────────────────────────────────
+  // Kullanıcı analiz sonrası AI'nın önerdiği pozisyonlardan seçim yapar
+  // (+ seviye filtresi + arama notu). Seçim yoksa iş burada durur; seçim
+  // API'si kaydı tekrar 'pending' yapınca analiz cache'ten okunup arama
+  // aşamasına geçilir.
+  const selectedPositions = toStringList(parseJsonField<unknown>(job.selected_positions, null));
+
+  if (!selectedPositions.length) {
+    console.log(`[Worker] Job ${job.id} - Analiz tamam; pozisyon seçimi bekleniyor.`);
+    await pool.query(
+      `UPDATE job_searches
+       SET status = 'awaiting_selection',
+           progress = GREATEST(progress, 45),
+           locked_at = NULL,
+           updated_at = NOW()
+       WHERE id = ?`,
+      [job.id]
+    );
+    return;
+  }
+
+  const seniorityFilter = typeof job.seniority_filter === "string" ? job.seniority_filter : "any";
+  const searchNote = typeof job.search_note === "string" && job.search_note.trim() ? job.search_note.trim() : undefined;
+
+  console.log(
+    `[Worker] Job ${job.id} - Arama başlıyor. Pozisyonlar: ${selectedPositions.join(", ")}` +
+      (seniorityFilter !== "any" ? ` | seviye: ${seniorityFilter}` : "") +
+      (searchNote ? " | not var" : "")
+  );
   await pool.query("UPDATE job_searches SET progress = GREATEST(progress, 55), updated_at = NOW() WHERE id = ?", [job.id]);
 
   const searchPayload = await runWithJobHeartbeat(
     job.id,
-    searchJobListings({
-      skills: profileResult.skills,
-      titles: profileResult.titles,
-      languages: profileResult.languages,
-      experienceAreas: profileResult.experienceAreas,
-      searchKeywords: profileResult.searchKeywords,
-      industries: profileResult.industries,
-      locationMode,
-      cities,
-      workMode,
-      userEmail,
-      fullText: text,
-      aiProfile: profileResult.aiProfile
-    }),
+    searchJobListings(
+      {
+        skills: profileResult.skills,
+        titles: profileResult.titles,
+        languages: profileResult.languages,
+        experienceAreas: profileResult.experienceAreas,
+        searchKeywords: profileResult.searchKeywords,
+        industries: profileResult.industries,
+        locationMode,
+        cities,
+        workMode,
+        userEmail,
+        fullText: text,
+        aiProfile: profileResult.aiProfile,
+        selectedPositions,
+        seniorityFilter,
+        searchNote
+      },
+      // Canlı tarama yalnızca worker akışında açılır; cache yetersizse
+      // platformlardan güncel ilan çekilir (kullanıcı 5 dk'ya razı).
+      { allowLiveCrawl: process.env.LIVE_CRAWL_ENABLED !== "false" }
+    ),
     SEARCH_TIMEOUT_MS
   );
 
@@ -195,6 +273,9 @@ async function processClaimedJob(job: JobSearchQueueRow) {
   const applySummary = await runApplyStage(job, text, fileType, profileResult, evaluation, finalResults);
 
   console.log(`[Worker] Job ${job.id} - Completed with ${finalResults.length} results.`);
+  // `AND status = 'processing'` koruması: iş bu sırada başkası tarafından
+  // yeniden kuyruğa alındıysa (ör. kullanıcı yeni bir seçim gönderdi ve kayıt
+  // 'pending' oldu) bu tur artık geçersizdir; eski sonucu üstüne yazmaz.
   await pool.query(
     `UPDATE job_searches
      SET status = 'completed',
@@ -208,7 +289,7 @@ async function processClaimedJob(job: JobSearchQueueRow) {
          locked_at = NULL,
          error_message = NULL,
          updated_at = NOW()
-     WHERE id = ?`,
+     WHERE id = ? AND status = 'processing'`,
     [
       finalResults.length,
       JSON.stringify(summary),
@@ -259,12 +340,20 @@ async function runApplyStage(
 
     console.log(`[Worker] Job ${job.id} - ${results.length} ilan için CV uyarlama ve başvuru hazırlığı başlıyor...`);
 
-    const applySummary = await prepareApplicationsForResults({
-      userId,
-      searchId: job.id,
-      cv: storedCv,
-      results
-    });
+    // Uyarlama + PDF üretimi dakikalar sürebilir; kalp atışı olmadan çalışırsa
+    // durum ucu 2 dk hareketsizlikte işi "takıldı" sayıp 'pending'e döndürür
+    // ve ikinci bir worker aynı işi ortadan kapar. Heartbeat locked_at'i canlı
+    // tutarak bu yarışı engeller.
+    const applySummary = await runWithJobHeartbeat(
+      job.id,
+      prepareApplicationsForResults({
+        userId,
+        searchId: job.id,
+        cv: storedCv,
+        results
+      }),
+      readPositiveNumber(process.env.APPLY_STAGE_TIMEOUT_MS, 480000)
+    );
 
     console.log(
       `[Worker] Job ${job.id} - Başvuru özeti: ${applySummary.prepared} hazırlandı, ` +
@@ -294,6 +383,8 @@ async function markJobFailed(jobId: number, error: unknown) {
   const pool = getDbPool();
   const message = error instanceof Error ? error.message : "Bilinmeyen worker hatası.";
 
+  // Tamamlanma yazımıyla aynı koruma: iş yeniden kuyruğa alındıysa eski turun
+  // hatası yeni turu 'failed' yapmamalı.
   await pool.query(
     `UPDATE job_searches
      SET status = 'failed',
@@ -303,9 +394,20 @@ async function markJobFailed(jobId: number, error: unknown) {
          locked_at = NULL,
          cv_text = NULL,
          updated_at = NOW()
-     WHERE id = ?`,
+     WHERE id = ? AND status = 'processing'`,
     [message.slice(0, 2000), jobId]
   );
+}
+
+/** JSON alanından güvenli string listesi çıkarır. */
+function toStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim())
+    .slice(0, 5);
 }
 
 function normalizeFileType(value: QueuedFileType | null): QueuedFileType {
@@ -331,6 +433,45 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * İşin TAMAMI boyunca `locked_at`'i canlı tutar.
+ *
+ * Neden gerekli: `claimNextJob`, `locked_at` STALE_PROCESSING_MINUTES'tan
+ * eskiyen 'processing' işleri "takılmış" sayıp yeniden kapar; durum ucu da
+ * aynı ölçüte bakıp işi 'pending'e döndürür. Analiz aşaması iki Gemini
+ * çağrısı (profil çıkarımı + değerlendirme) yaptığı için tek başına 2 dakikayı
+ * aşabiliyor. Eskiden kalp atışı yalnızca arama ve başvuru aşamalarını
+ * sarıyordu; aradaki analiz penceresi korumasızdı ve iş kendi kendine yeniden
+ * kuyruğa düşüp baştan işlenebiliyordu.
+ *
+ * Dönen fonksiyon çağrıldığında atış durur.
+ */
+function startJobHeartbeat(jobId: number): () => void {
+  const pool = getDbPool();
+  let stopped = false;
+
+  const timer = setInterval(() => {
+    if (stopped) {
+      return;
+    }
+
+    void pool
+      .query(
+        `UPDATE job_searches
+         SET locked_at = NOW(), updated_at = NOW()
+         WHERE id = ? AND status = 'processing'`,
+        [jobId]
+      )
+      .catch((error) => console.error(`[Worker] Job ${jobId} heartbeat failed:`, error));
+  }, HEARTBEAT_MS);
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+/** Uzun süren bir aşamayı ilerleme çubuğu + zaman aşımıyla sarar. */
 async function runWithJobHeartbeat<T>(jobId: number, work: Promise<T>, timeoutMs: number) {
   const pool = getDbPool();
   let progress = 55;

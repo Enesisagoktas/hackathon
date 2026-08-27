@@ -2,21 +2,29 @@
 
 CV'nizi yükleyin. Sistem size uygun ilanları bulur, **her ilan için CV'nizi o ilana göre yeniden yazar**, ön yazısını hazırlar ve — izin verdiğiniz eşiğin üstündeki eşleşmelerde — **başvuruyu sizin adınıza gönderir**.
 
-## Akış
+## Akış (sayfa sayfa)
 
 ```
-CV yükle
-   ↓
-AI profil çıkarımı + CV puanlama
-   ↓
-Veritabanı cache'indeki aktif ilanlarla eşleştirme ve skorlama
-   ↓
-Her uygun ilan için:  CV'yi o ilana göre yeniden kurgula  →  PDF + DOCX üret  →  ön yazı yaz
-   ↓
-İlanda başvuru e-postası var mı?
-   ├─ var  →  skor eşiği geçildiyse OTOMATİK GÖNDER, yoksa onay kuyruğuna al
-   └─ yok  →  paketi hazırla, ilan sayfasından tek tıkla tamamlaman için beklet
+1. /            Giriş + CV yükle (PDF/DOCX)
+       ↓
+2. /analiz/[id] AI profil çıkarımı + CV puanlama
+       ↓        AI, en güçlü olduğun 5 POZİSYONU önerir;
+       ↓        sen seçersin (+ seviye filtresi: stajyer/junior/uzman/senior,
+       ↓        + 3-4 cümlelik arama notu — anahtar ifadeler skorlamada dikkate alınır)
+       ↓
+3. Arama        Önce cache; YETERLİ ALAKALI İLAN YOKSA platformlardan CANLI TARAMA
+       ↓        (Kariyer.net, Secretcv, Eleman.net, Yenibiriş, Toptalent) —
+       ↓        bulunanlar cache'e yazılır, AI hepsini CV'ne göre skorlar.
+       ↓        Meslek uyumu zorunlu: hemşireye ofis ilanı önerilmez.
+       ↓
+4. /basvurular  Uygun her ilan için CV yeniden yazılır (tasarımlı PDF + DOCX) + ön yazı.
+                İlanda e-posta varsa ve otomatik gönderim AÇIKSA 80+ puanda gönderilir;
+                diğer her şey onayına düşer.
 ```
+
+Otomatik gönderim tek bir onay kutusudur: gönderen bilgileri hesabından ve
+e-posta adresinden türetilir; SMTP sunucu/port alan adından otomatik bulunur,
+senden yalnızca bir kez e-posta + uygulama şifresi istenir.
 
 ## Uydurma yasağı
 

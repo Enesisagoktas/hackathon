@@ -8,7 +8,12 @@ const BATCH_SIZE = 4;
 // blocks the worker. A single attempt keeps the worst case ~SCORING_TIMEOUT_MS.
 const SCORING_TIMEOUT_MS = Number(process.env.AI_SCORING_TIMEOUT_MS ?? 28000);
 const SCORING_MAX_ATTEMPTS = Number(process.env.AI_SCORING_MAX_ATTEMPTS ?? 1);
-const MIN_RESULTS = 6;
+// Kullanıcı "aktif ilanların tamamı listelensin" istiyor: AI'ya giden aday
+// sayısı ve sonuç tavanı geniş tutulur. Süre, worker akışında sorun değil.
+const MAX_SCORED_CANDIDATES = Number(process.env.AI_MAX_SCORED ?? 60);
+const MAX_RESULTS = Number(process.env.AI_MAX_RESULTS ?? 100);
+// Bu skorun altındaki ilanlar alaka eşiğini geçemez ve listeye girmez.
+const MIN_RELEVANT_SCORE = Number(process.env.AI_MIN_RELEVANT_SCORE ?? 30);
 
 type AiScoreItem = {
   index: number;
@@ -23,6 +28,18 @@ type AiScoreItem = {
   };
 };
 
+export type ScoringOutcome = {
+  results: JobSearchResult[];
+  /**
+   * AI'nın FİİLEN karar verdiği ilanların URL'leri (hem kabul hem ret).
+   *
+   * Çağıran taraf bunu "bu ilanlar bir daha skorlanmasın" listesi olarak
+   * kullanır. Batch'i çöktüğü için hiç değerlendirilemeyen ilanlar bu kümeye
+   * GİRMEZ; böylece sonraki turda yeniden denenebilirler.
+   */
+  evaluatedUrls: Set<string>;
+};
+
 /**
  * AI-powered semantic scoring using Gemini.
  * No keyword fallback. If AI fails, the jobs are not scored.
@@ -30,13 +47,14 @@ type AiScoreItem = {
 export async function scoreListingsWithAi(
   listings: CrawledJobListing[],
   profile: CandidateProfile
-): Promise<JobSearchResult[]> {
+): Promise<ScoringOutcome> {
   if (!profile.cvSummary && !profile.fullText) {
     console.warn("No CV text available for AI scoring; returning cheap-scored results.");
-    return buildUnscoredResults(listings.slice(0, 15));
+    const fallback = listings.slice(0, MAX_SCORED_CANDIDATES);
+    return { results: buildUnscoredResults(fallback), evaluatedUrls: new Set<string>() };
   }
 
-  const topCandidates = listings.slice(0, 15);
+  const topCandidates = listings.slice(0, MAX_SCORED_CANDIDATES);
   const batches = createBatches(topCandidates, BATCH_SIZE);
 
   // Run every batch concurrently. A failed or slow batch never blocks the
@@ -45,6 +63,7 @@ export async function scoreListingsWithAi(
 
   const scored: JobSearchResult[] = [];
   const leftover: CrawledJobListing[] = [];
+  const evaluatedUrls = new Set<string>();
 
   batches.forEach((batch, batchIndex) => {
     const outcome = settled[batchIndex];
@@ -57,28 +76,37 @@ export async function scoreListingsWithAi(
     const aiScores = outcome.value;
     batch.forEach((listing, j) => {
       const aiScore = aiScores.find((s) => s.index === j);
-      if (aiScore && aiScore.score >= 20) {
-        scored.push(buildScoredResult(listing, aiScore, `${batchIndex}-${j}`));
-      } else {
+
+      if (!aiScore) {
+        // AI bu ilan için satır döndürmedi: değerlendirilmemiş sayılır ve
+        // sonraki turda yeniden denenebilir.
         leftover.push(listing);
+        return;
       }
+
+      evaluatedUrls.add(listing.url);
+
+      if (aiScore.score >= MIN_RELEVANT_SCORE) {
+        scored.push(buildScoredResult(listing, aiScore, `${batchIndex}-${j}`));
+      }
+      // Düşük puanlılar bilinçli olarak elenir; listeye dolgu yapılmaz.
     });
   });
 
-  // Never return an empty screen: if AI produced nothing usable, show the
-  // cheap-ranked real listings. If results are sparse, top them up.
-  if (scored.length === 0) {
-    return buildUnscoredResults(topCandidates);
+  // AI tamamen çökmüşse (hiçbir ilan değerlendirilemediyse) anahtar kelime
+  // sıralı gerçek ilanlar gösterilir — bunlar düşük güvenlidir ve otomatik
+  // gönderilmez. AI EN AZ BİR ilanı değerlendirebildiyse dolgu YAPILMAZ:
+  // "hemşire CV'sine ofis personeli önerme" hatası tam bu dolgudan çıkıyordu.
+  if (evaluatedUrls.size === 0 && leftover.length) {
+    return { results: buildUnscoredResults(topCandidates), evaluatedUrls };
   }
 
-  if (scored.length < MIN_RESULTS && leftover.length) {
-    scored.push(...buildUnscoredResults(leftover).slice(0, MIN_RESULTS - scored.length));
-  }
-
-  return scored
+  const results = scored
     .sort((left, right) => right.matchScore - left.matchScore)
-    .slice(0, 30)
+    .slice(0, MAX_RESULTS)
     .map((result, index) => ({ ...result, id: `${result.id}:${index + 1}` }));
+
+  return { results, evaluatedUrls };
 }
 
 function buildScoredResult(listing: CrawledJobListing, aiScore: AiScoreItem, idSuffix: string): JobSearchResult {
@@ -154,11 +182,34 @@ Kurallar:
 - detail: en fazla 1 kısa cümle (Türkçe).
 - overallPercent: 0-100 arası genel uyum.
 
-Puanlama: 85-100 çok güçlü, 70-84 iyi, 50-69 orta, 30-49 düşük, 0-29 uyumsuz. Kıdem uyumsuzluğu puanı düşürür.`;
+Puanlama: 85-100 çok güçlü, 70-84 iyi, 50-69 orta, 30-49 düşük, 0-29 uyumsuz. Kıdem uyumsuzluğu puanı düşürür.
+
+MESLEK UYUMU (en önemli kural): İlanın meslek alanı adayın meslek alanından
+farklıysa (örnek: aday hemşire, ilan ofis personeli/yazılımcı/satış) skoru
+0-15 aralığında ver. Yüzeysel kelime benzerliği (ör. ikisinde de "iletişim"
+geçmesi) meslek uyumu SAYILMAZ.`;
+
+  const extraDirectives: string[] = [];
+
+  if (profile.desiredSeniority) {
+    extraDirectives.push(
+      `Kullanıcı özellikle "${profile.desiredSeniority}" seviyesinde ilan arıyor; bu seviyeye uymayan ilanların skorunu belirgin düşür (örn. stajyer arayana senior ilanı 30'un altı).`
+    );
+  }
+
+  if (profile.searchNote) {
+    extraDirectives.push(
+      `Kullanıcının arama notu: "${profile.searchNote}". Bu nottaki anahtar ifadeleri karşılayan ilanlara ek puan ver, notla çelişen ilanların puanını düşür.`
+    );
+  }
+
+  const directiveBlock = extraDirectives.length
+    ? ["", "KULLANICI TERCİHLERİ:", ...extraDirectives.map((item) => `- ${item}`), ""].join("\n")
+    : "";
 
   const prompt = `ADAY PROFİLİ:
 ${cvContext}
-
+${directiveBlock}
 İŞ İLANLARI (${listingSummaries.length} adet):
 ${JSON.stringify(listingSummaries)}
 
@@ -235,6 +286,8 @@ function buildCvContext(profile: CandidateProfile): string {
   if (profile.educationLevel) parts.push(`Eğitim: ${profile.educationLevel}`);
   if (profile.professionCategory) parts.push(`Meslek Kategorisi: ${profile.professionCategory}`);
   if (profile.preferredRoles?.length) parts.push(`Tercih Edilen Roller: ${profile.preferredRoles.join(", ")}`);
+  if (profile.desiredSeniority) parts.push(`Aranan Seviye: ${profile.desiredSeniority}`);
+  if (profile.searchNote) parts.push(`Kullanıcı Notu: ${profile.searchNote}`);
 
   if (profile.fullText) {
     parts.push(`\nCV Tam Metin (kısaltılmış):\n${profile.fullText.slice(0, 2000)}`);
