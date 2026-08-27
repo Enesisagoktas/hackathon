@@ -19,7 +19,10 @@
     "test:crawl": "tsx scripts/test-crawl-guards.ts",
     "test:search": "tsx scripts/test-search-guards.ts",
     "test:recipient": "tsx scripts/test-recipient.ts",
-    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search"
+    "test:requirements": "tsx scripts/test-requirement-parser.ts",
+    "test:eligibility": "tsx scripts/test-eligibility.ts",
+    "audit:eligibility": "tsx scripts/audit-eligibility.ts",
+    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search && npm run test:requirements && npm run test:eligibility"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -334,10 +334,40 @@ async function runLiveCrawl(profile: CandidateProfile): Promise<string> {
 }
 
 /** Sonuçları puana göre sıralar (kind=job filtreli). */
+/**
+ * §14 — Sıralama yalnızca yüzdelik skora göre yapılmaz.
+ *
+ * Öncelik: uygunluk → pozisyon uygunluğu → toplam skor → ilan güncelliği.
+ * Böylece "teknik olarak parlak ama adayın başvuramayacağı" ilan, gerçekten
+ * uygun bir ilanın üstüne çıkamaz. Uygunluk verisi olmayan (AI'siz) sonuçlar
+ * eski davranışa düşer ve skora göre sıralanır.
+ */
 function sortResults(results: JobSearchResult[]): JobSearchResult[] {
   return results
     .filter((result) => result.kind === "job")
-    .sort((left, right) => right.matchScore - left.matchScore);
+    .sort((left, right) => {
+      const leftEligible = left.eligibility?.eligible ?? true;
+      const rightEligible = right.eligibility?.eligible ?? true;
+
+      if (leftEligible !== rightEligible) {
+        return leftEligible ? -1 : 1;
+      }
+
+      const leftRole = left.eligibility?.roleScore ?? 0;
+      const rightRole = right.eligibility?.roleScore ?? 0;
+
+      if (Math.abs(leftRole - rightRole) >= 5) {
+        return rightRole - leftRole;
+      }
+
+      if (left.matchScore !== right.matchScore) {
+        return right.matchScore - left.matchScore;
+      }
+
+      const leftDate = left.postedAt ? Date.parse(left.postedAt) : 0;
+      const rightDate = right.postedAt ? Date.parse(right.postedAt) : 0;
+      return (Number.isNaN(rightDate) ? 0 : rightDate) - (Number.isNaN(leftDate) ? 0 : leftDate);
+    });
 }
 
 /** İki sonuç kümesini URL bazında birleştirir; aynı ilan iki kez listelenmez. */

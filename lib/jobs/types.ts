@@ -130,6 +130,41 @@ export type JobSearchResult = {
   requirements?: string[];
   /** İlanın "aday kriterleri" satırları. */
   candidateCriteria?: string[];
+  /** §11 — Katmanlı uygunluk sonucu; eleme ve sıralama buna dayanır. */
+  eligibility?: EligibilitySummary;
+};
+
+/**
+ * Arayüze taşınan uygunluk özeti.
+ *
+ * `lib/jobs/eligibility.ts` içindeki tam sonucun sadeleştirilmiş hâlidir;
+ * kullanıcıya yalnızca yüzde değil, NEDEN uygun olduğu da gösterilir.
+ */
+export type EligibilitySummary = {
+  eligible: boolean;
+  /** Elenmişse zorunlu şart ihlalleri. */
+  blockers: { code: string; label: string; detail: string }[];
+  /** 0-60 */
+  roleScore: number;
+  /** 0-40 */
+  technicalScore: number;
+  band: "cok-guclu" | "cok-uygun" | "uygun" | "sinirda" | "uygun-degil";
+  bandLabel: string;
+  /** Pozisyon uygunluğu bileşenleri (deneyim, kıdem, eğitim, konum, dil). */
+  roleComponents: EligibilityComponent[];
+  /** Teknik uyum bileşenleri. */
+  technicalComponents: EligibilityComponent[];
+  /** İlandan kaç şart okunabildi. */
+  confidence: "high" | "medium" | "low";
+};
+
+export type EligibilityComponent = {
+  key: string;
+  label: string;
+  earned: number;
+  max: number;
+  status: "met" | "partial" | "unmet" | "unknown";
+  detail: string;
 };
 
 export type PlatformCrawlStatus = {

@@ -2,6 +2,14 @@ import { getWorkModeDisplay } from "@/lib/search-preferences";
 import type { CandidateProfile, CrawledJobListing, CriteriaItem, CriteriaMatchResult, JobSearchResult } from "@/lib/jobs/types";
 import { truncateText } from "@/lib/jobs/normalize";
 import { generateJsonWithGemini } from "@/lib/gemini";
+import {
+  BAND_LABELS,
+  buildCandidateEligibility,
+  evaluateEligibility,
+  type CandidateEligibility,
+  type EligibilityResult
+} from "@/lib/jobs/eligibility";
+import { extractRoleRequirements } from "@/lib/jobs/requirement-parser";
 
 const BATCH_SIZE = 4;
 // Scoring is bounded and runs in parallel so a slow/unavailable Gemini never
@@ -30,6 +38,8 @@ type AiScoreItem = {
 
 export type ScoringOutcome = {
   results: JobSearchResult[];
+  /** Zorunlu şart ihlali nedeniyle elenen ilanlar (§11 Katman 1). */
+  rejected?: Array<{ listing: CrawledJobListing; blockers: { code: string; label: string; detail: string }[] }>;
   /**
    * AI'nın FİİLEN karar verdiği ilanların URL'leri (hem kabul hem ret).
    *
@@ -56,6 +66,8 @@ export async function scoreListingsWithAi(
 
   const topCandidates = listings.slice(0, MAX_SCORED_CANDIDATES);
   const batches = createBatches(topCandidates, BATCH_SIZE);
+  // Aday profili bir kez çıkarılır; her ilan için yeniden hesaplanmasına gerek yok.
+  const candidateEligibility = buildCandidateEligibility(profile);
 
   // Run every batch concurrently. A failed or slow batch never blocks the
   // others, and its listings fall back to cheap-scored real results.
@@ -64,6 +76,8 @@ export async function scoreListingsWithAi(
   const scored: JobSearchResult[] = [];
   const leftover: CrawledJobListing[] = [];
   const evaluatedUrls = new Set<string>();
+  /** Hard filter'a takılan ilanlar — kullanıcıya "kaç ilan neden elendi" denir. */
+  const rejected: Array<{ listing: CrawledJobListing; blockers: { code: string; label: string; detail: string }[] }> = [];
 
   batches.forEach((batch, batchIndex) => {
     const outcome = settled[batchIndex];
@@ -87,7 +101,17 @@ export async function scoreListingsWithAi(
       evaluatedUrls.add(listing.url);
 
       if (aiScore.score >= MIN_RELEVANT_SCORE) {
-        scored.push(buildScoredResult(listing, aiScore, `${batchIndex}-${j}`));
+        const result = buildScoredResult(listing, aiScore, `${batchIndex}-${j}`, candidateEligibility);
+
+        // §11 — Zorunlu şart ihlali varsa ilan skor ne olursa olsun elenir.
+        // Örnek: öğrenci aday + "üniversite mezunu, en az 2 yıl deneyim" ilanı,
+        // teknik uyum %95 olsa bile listeye girmez.
+        if (result.eligibility && !result.eligibility.eligible) {
+          rejected.push({ listing, blockers: result.eligibility.blockers });
+          return;
+        }
+
+        scored.push(result);
       }
       // Düşük puanlılar bilinçli olarak elenir; listeye dolgu yapılmaz.
     });
@@ -106,10 +130,86 @@ export async function scoreListingsWithAi(
     .slice(0, MAX_RESULTS)
     .map((result, index) => ({ ...result, id: `${result.id}:${index + 1}` }));
 
-  return { results, evaluatedUrls };
+  if (rejected.length) {
+    const reasons = new Map<string, number>();
+    for (const item of rejected) {
+      for (const blocker of item.blockers) {
+        reasons.set(blocker.label, (reasons.get(blocker.label) ?? 0) + 1);
+      }
+    }
+    const summary = Array.from(reasons.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([label, count]) => `${label} (${count})`)
+      .join(", ");
+    console.log(`[score] ${rejected.length} ilan zorunlu şart nedeniyle elendi — ${summary}`);
+  }
+
+  return { results, evaluatedUrls, rejected };
 }
 
-function buildScoredResult(listing: CrawledJobListing, aiScore: AiScoreItem, idSuffix: string): JobSearchResult {
+/**
+ * §11 — AI skorunu katmanlı uygunlukla birleştirir.
+ *
+ * AI skoru "bu CV bu ilana ne kadar benziyor" sorusunu iyi cevaplıyor ama
+ * "aday bu ilana başvurabilir mi" sorusunu cevaplayamıyor. Bu yüzden:
+ *   • Pozisyon uygunluğu (60 puan) tamamen deterministik motordan gelir.
+ *   • Teknik uyum (40 puan) deterministik kapsama ile AI skorunun ortalamasıdır;
+ *     AI, kelime eşleşmesinin göremediği anlamsal yakınlığı yakalar.
+ *   • Zorunlu şart ihlali varsa skor ne olursa olsun ilan elenir.
+ */
+export function combineWithEligibility(
+  listing: CrawledJobListing,
+  candidate: CandidateEligibility,
+  aiScore: number,
+  matchedKeywords: string[]
+): { eligibility: EligibilityResult; finalScore: number } {
+  const role = extractRoleRequirements({
+    title: listing.title,
+    description: listing.description,
+    requirements: listing.requirements,
+    candidateCriteria: listing.candidateCriteria,
+    location: listing.location,
+    workMode: listing.workMode
+  });
+
+  const eligibility = evaluateEligibility(role, candidate, {
+    listingVerified: true,
+    listingKeywords: [listing.title, ...matchedKeywords]
+  });
+
+  const blendedTechnical = (eligibility.technicalScore + (aiScore / 100) * 40) / 2;
+  const finalScore = Math.round(Math.min(100, eligibility.roleScore + blendedTechnical));
+
+  return {
+    eligibility: { ...eligibility, technicalScore: Math.round(blendedTechnical * 10) / 10, totalScore: finalScore },
+    finalScore
+  };
+}
+
+function toEligibilitySummary(result: EligibilityResult) {
+  return {
+    eligible: result.eligible,
+    blockers: result.blockers.map((item) => ({ code: item.code, label: item.label, detail: item.detail })),
+    roleScore: result.roleScore,
+    technicalScore: result.technicalScore,
+    band: result.band,
+    bandLabel: BAND_LABELS[result.band],
+    roleComponents: result.roleComponents,
+    technicalComponents: result.technicalComponents,
+    confidence: result.requirementConfidence
+  };
+}
+
+function buildScoredResult(
+  listing: CrawledJobListing,
+  aiScore: AiScoreItem,
+  idSuffix: string,
+  candidate?: CandidateEligibility
+): JobSearchResult {
+  const combined = candidate
+    ? combineWithEligibility(listing, candidate, aiScore.score, aiScore.matchedKeywords ?? [])
+    : null;
+
   return {
     id: `${listing.platform}:${listing.externalId ?? listing.url}:${idSuffix}`,
     kind: "job",
@@ -122,9 +222,10 @@ function buildScoredResult(listing: CrawledJobListing, aiScore: AiScoreItem, idS
     query: listing.sourceQuery,
     description: truncateText(listing.description || listing.requirements?.join(" ") || "İlan açıklaması parse edildi."),
     url: listing.url,
-    matchScore: aiScore.score,
+    matchScore: combined?.finalScore ?? aiScore.score,
     matchReasons: aiScore.reasons.slice(0, 5),
     confidence: aiScore.score >= 75 ? "high" : aiScore.score >= 50 ? "medium" : "low",
+    eligibility: combined ? toEligibilitySummary(combined.eligibility) : undefined,
     actionLabel: "İlanı Aç",
     postedAt: listing.postedAt,
     matchedKeywords: aiScore.matchedKeywords.slice(0, 10),
