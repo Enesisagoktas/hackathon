@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { parseProgress } from "@/lib/jobs/progress";
+import { looksLikeNonJobPage } from "@/lib/jobs/relevance";
 import { getDbPool } from "@/lib/db";
 import { ensureJobQueueSchema, parseJsonField } from "@/lib/job-queue";
 import { ensureJobWorkerRunning } from "@/lib/job-worker";
@@ -91,7 +92,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
       aiProfile,
       evaluation: parseJsonField(row.evaluation, null),
       summary: parseJsonField(row.summary, null),
-      results: parseJsonField(row.results, []),
+      results: await filterStoredResults(parseJsonField(row.results, [])),
       applySummary: parseJsonField(row.apply_summary, null),
       // Pozisyon seçim ekranı için: AI'nın en güçlü gördüğü 5 pozisyon.
       suggestedPositions: buildSuggestedPositions(aiProfile),
@@ -165,4 +166,43 @@ function toTime(value: unknown) {
 function readPositiveNumber(value: string | undefined, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Kaydedilmiş sonuçları OKUMA ANINDA süzer.
+ *
+ * Sonuç JSON'u arama tamamlandığı anda dondurulur; sonradan yayından kalkan
+ * ya da ilan olmadığı anlaşılan kayıtlar (ölçüm: Indeed maaş sayfaları)
+ * içinde kalır ve kullanıcı "İlanı Aç" deyince boşa tıklar. Burada iki süzgeç
+ * uygulanır: ilan-olmayan sayfa kalıpları ve ilanın güncel expired durumu.
+ */
+async function filterStoredResults(results: unknown): Promise<unknown> {
+  if (!Array.isArray(results) || !results.length) {
+    return results;
+  }
+
+  const items = results as Array<{ title?: string; url?: string; listingId?: number }>;
+  const kept = items.filter((item) => !looksLikeNonJobPage(String(item.title ?? ""), String(item.url ?? "")));
+
+  const ids = kept
+    .map((item) => item.listingId)
+    .filter((id): id is number => typeof id === "number" && Number.isFinite(id));
+
+  if (!ids.length) {
+    return kept;
+  }
+
+  try {
+    const pool = getDbPool();
+    const [rows] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT id FROM job_listings WHERE id IN (${ids.map(() => "?").join(", ")}) AND status = 'expired'`,
+      ids
+    );
+    const expired = new Set(rows.map((row) => Number(row.id)));
+
+    return expired.size ? kept.filter((item) => !item.listingId || !expired.has(item.listingId)) : kept;
+  } catch {
+    // Süzgeç bir kolaylıktır; veritabanı hatası sonuçları göstermeyi engellememeli.
+    return kept;
+  }
 }
