@@ -5,7 +5,7 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 
 import { closeDbPool, getDbPool } from "../lib/db";
 import { titleMatchesUrl } from "../lib/jobs/crawler";
-import { looksLikeBlockedPage } from "../lib/jobs/relevance";
+import { looksLikeBlockedPage, looksLikeNonJobPage } from "../lib/jobs/relevance";
 import type mysql from "mysql2/promise";
 
 /**
@@ -36,6 +36,11 @@ async function main() {
       return true;
     }
 
+    // İlan olmayan içerik: maaş istatistiği, şirket profili (Indeed /salaries).
+    if (looksLikeNonJobPage(title, String(row.external_url ?? ""))) {
+      return true;
+    }
+
     // Başlığı URL'siyle hiç örtüşmeyen kayıtlar: crawler, <h1> bulunmayan
     // sayfalarda listeden BAŞKA bir ilanın başlığını alıyordu (Toptalent).
     return !titleMatchesUrl(title, String(row.external_url ?? ""));
@@ -53,7 +58,9 @@ async function main() {
     const title = String(row.title ?? "").slice(0, 55);
     const reason = looksLikeBlockedPage(title, String(row.description ?? ""))
       ? "engel sayfası"
-      : "başlık–URL uyuşmuyor";
+      : looksLikeNonJobPage(title, String(row.external_url ?? ""))
+        ? "ilan değil (maaş/profil sayfası)"
+        : "başlık–URL uyuşmuyor";
     const key = `[${reason}] ${title}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }

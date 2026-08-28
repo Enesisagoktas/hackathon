@@ -1,4 +1,4 @@
-import { buildProfileTerms, filterListingsByProfile, isListingRelatedToProfile, looksLikeBlockedPage } from "../lib/jobs/relevance";
+import { buildProfileTerms, filterListingsByProfile, isListingRelatedToProfile, looksLikeBlockedPage, looksLikeNonJobPage } from "../lib/jobs/relevance";
 import type { CandidateProfile, CrawledJobListing } from "../lib/jobs/types";
 
 /**
@@ -156,4 +156,37 @@ const allBlocked = filterListingsByProfile([listing("Sorry, you have been blocke
 check("Engel sayfaları hiçbir koşulda geri gelmez", allBlocked.kept.length === 0);
 
 console.log(`\n═══ Sonuç: ${passed} geçti, ${failed} kaldı ═══\n`);
+if (failed > 0) process.exitCode = 1;
+
+console.log("\n8) İlan olmayan içerik sayfaları (ölçüm: Indeed maaş sayfaları)");
+check(
+  "Indeed maaş sayfası başlıktan yakalanır",
+  looksLikeNonJobPage("Çankaya konumundaki Hemşire maaşı", "https://tr.indeed.com/career/hem%C5%9Fire/salaries/%C3%87ankaya"),
+  "cache'e ilan diye girmişti"
+);
+check(
+  "Maaş sayfası URL'den de yakalanır",
+  looksLikeNonJobPage("Herhangi bir başlık", "https://tr.indeed.com/career/frontend-developer/salaries/istanbul")
+);
+check("Şirket profili yakalanır", looksLikeNonJobPage("Acme Şirket Profili", "https://ornek.com/cmp/acme"));
+check(
+  "Gerçek ilan yakalanmaz",
+  !looksLikeNonJobPage("Hemşire - Maaş + yan haklar", "https://ornek.com/is-ilani/hemsire-12345"),
+  "başlıkta 'maaş' geçmesi tek başına yetmez"
+);
+check(
+  "Maaşla biten gerçek unvan hatası olmasın",
+  !looksLikeNonJobPage("Hemşire", "https://ornek.com/is-ilani/hemsire-999")
+);
+
+const salaryFiltered = filterListingsByProfile(
+  [
+    listing("Çankaya konumundaki Hemşire maaşı"),
+    { ...listing("Hemşire"), url: "https://ornek.com/is-ilani/hemsire-1" }
+  ],
+  nurse
+);
+check("Süzgeç maaş sayfasını ilanlardan atar", salaryFiltered.kept.length === 1 && salaryFiltered.kept[0].title === "Hemşire");
+
+console.log(`\n═══ Nihai: ${passed} geçti, ${failed} kaldı ═══`);
 if (failed > 0) process.exitCode = 1;

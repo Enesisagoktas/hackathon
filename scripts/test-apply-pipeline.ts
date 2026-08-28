@@ -302,7 +302,9 @@ async function run() {
   check("E-postasız ilan elle başvuruda", summary.manualRequired === 1, `manualRequired=${summary.manualRequired}`);
   check("Hata yok", summary.failed === 0, `failed=${summary.failed}`);
 
-  const applications = await listApplications(user.id, { limit: 10 });
+  // Sabit test kullanıcısında önceki turlardan kayıt birikir; düşük limit bu
+  // turun kayıtlarını sıralamanın dışına itebiliyor (canlıda yaşandı).
+  const applications = await listApplications(user.id, { limit: 200 });
   const emailApp = applications.find((app) => app.listingUrl === "https://example.com/test-ilan-1");
   const portalApp = applications.find((app) => app.listingUrl === "https://example.com/test-ilan-2");
 

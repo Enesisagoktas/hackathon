@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 
 import { closeDbPool } from "../lib/db";
 import { getListingsForVerification } from "../lib/jobs/repository";
-import { verifyListing, type VerifyDecision } from "../lib/jobs/verifier";
+import { resetVerifierCircuit, verifyListing, type VerifyDecision } from "../lib/jobs/verifier";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 
@@ -22,6 +22,7 @@ async function run() {
   const limit = Number.isFinite(cliLimit) && cliLimit > 0 ? cliLimit : BATCH_SIZE;
 
   try {
+    resetVerifierCircuit();
     const listings = await getListingsForVerification(limit);
     console.log(`[verify:jobs] ${listings.length} ilan kontrol edilecek (limit ${limit})...`);
 

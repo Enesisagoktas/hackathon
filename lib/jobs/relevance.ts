@@ -170,6 +170,32 @@ const BLOCK_PAGE_PATTERNS = [
   /captcha/i
 ];
 
+/**
+ * İlan OLMAYAN içerik sayfaları: maaş istatistiği, şirket profili, blog.
+ *
+ * Ölçüm: Indeed'in "/career/hemşire/salaries/Çankaya" maaş sayfaları
+ * "Çankaya konumundaki Hemşire maaşı" başlığıyla cache'e girmiş ve
+ * kullanıcıya ilan diye gösterilmişti — tıklayınca ilan değil istatistik
+ * sayfası açılıyordu. Başlık VE URL kalıplarıyla yakalanır.
+ */
+const NON_JOB_TITLE_PATTERNS = [
+  /konumundaki\s+.*maaş(ı|ları)?\s*$/i,
+  /maaş(ı|ları)\s*$/i,
+  /(average|ortalama)\s+(salary|maaş)/i,
+  /salaries\s+(in|for)\s/i,
+  /şirket\s+profili\s*$/i,
+  /company\s+profile\s*$/i
+];
+
+const NON_JOB_URL_PATTERNS = [/\/salaries?\//i, /\/maas(lar)?\//i, /\/cmp\/[^/]+\/?$/i];
+
+export function looksLikeNonJobPage(title: string, url = ""): boolean {
+  return (
+    NON_JOB_TITLE_PATTERNS.some((pattern) => pattern.test(title)) ||
+    NON_JOB_URL_PATTERNS.some((pattern) => pattern.test(url))
+  );
+}
+
 export function looksLikeBlockedPage(title: string, description = ""): boolean {
   const haystack = `${title} ${description.slice(0, 300)}`;
   return BLOCK_PAGE_PATTERNS.some((pattern) => pattern.test(haystack));
@@ -201,7 +227,11 @@ export function filterListingsByProfile(
 
   // Engel/hata sayfaları hiçbir koşulda ilan sayılmaz — güvenlik supabı da
   // bunları geri getirmemeli.
-  const real = listings.filter((listing) => !looksLikeBlockedPage(listing.title, listing.description));
+  const real = listings.filter(
+    (listing) =>
+      !looksLikeBlockedPage(listing.title, listing.description) &&
+      !looksLikeNonJobPage(listing.title, listing.url)
+  );
 
   for (const listing of real) {
     if (isListingRelatedToProfile(listing, terms)) {

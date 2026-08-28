@@ -49,7 +49,37 @@ export type VerifyOutcome = {
  *  - last_seen_at older than N days → expired
  * A single timeout never expires a listing on its own.
  */
+/**
+ * §13 — Alan adı bazında devre kesici.
+ *
+ * Bir site bize 403/429 basıyorsa aynı turda o siteye istek atmaya devam
+ * etmek hem yasaktır (bot korumasını zorlamak) hem de engeli uzatır.
+ * Ölçüm: Kariyer.net doğrulayıcıya 403 basmaya başladığında 100 kaydın
+ * hepsi tek tek denenip 100 kez 403 yenmişti. Üç ardışık engelden sonra o
+ * alanın kalan kayıtları atlanır; süreç başına sıfırlanır.
+ */
+const hostBlockCounts = new Map<string, number>();
+const HOST_BLOCK_THRESHOLD = 3;
+
+export function resetVerifierCircuit(): void {
+  hostBlockCounts.clear();
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
 export async function verifyListing(record: JobListingRecord): Promise<VerifyOutcome> {
+  const host = hostOf(record.externalUrl);
+
+  if (host && (hostBlockCounts.get(host) ?? 0) >= HOST_BLOCK_THRESHOLD) {
+    return outcome(record.id, "skipped", `${host} bu turda bizi engelliyor; kaynağa yüklenilmedi`);
+  }
+
   if (isOlderThanDays(record.lastSeenAt, EXPIRE_AFTER_DAYS)) {
     await markListingExpired(record.id, `last_seen_at ${EXPIRE_AFTER_DAYS} günden eski`);
     return outcome(record.id, "expired", `${EXPIRE_AFTER_DAYS} günden uzun süredir görülmedi`);
@@ -70,8 +100,17 @@ export async function verifyListing(record: JobListingRecord): Promise<VerifyOut
   }
 
   if (response.status === 403 || response.status === 429 || response.status >= 500) {
+    if (host && (response.status === 403 || response.status === 429)) {
+      hostBlockCounts.set(host, (hostBlockCounts.get(host) ?? 0) + 1);
+    }
+
     await incrementListingError(record.id, `HTTP ${response.status}`);
     return outcome(record.id, "error", `geçici hata HTTP ${response.status}`);
+  }
+
+  // Başarılı yanıt sayacı sıfırlar: tekil 403'ler kalıcı engel değildir.
+  if (host) {
+    hostBlockCounts.delete(host);
   }
 
   // Yönlendirme kontrolü: kapanan/silinen ilanlar 404 vermek yerine sık sık

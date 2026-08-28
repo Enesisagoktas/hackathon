@@ -26,6 +26,8 @@ export type JobApplication = {
   listingLocation?: string;
   listingPlatform?: string;
   listingUrl: string;
+  /** Bağlı ilanın güncel durumu; expired ise "İlanı Aç" uyarıyla gösterilir. */
+  listingStatus?: "active" | "stale" | "expired";
   matchScore: number;
   status: ApplicationStatus;
   channel: ApplicationChannel;
@@ -285,14 +287,17 @@ export async function listApplications(
     params.push(options.status);
   }
 
+  // İlanın güncel durumu da taşınır: kullanıcı "İlanı Aç" demeden önce
+  // yayından kalkmış ilanı görebilmeli (tıklayınca site ana sayfaya düşüyor).
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
-    `SELECT * FROM job_applications
-     WHERE ${where.join(" AND ")}
+    `SELECT a.*, l.status AS listing_status FROM job_applications a
+     LEFT JOIN job_listings l ON l.id = a.listing_id
+     WHERE ${where.map((clause) => `a.${clause}`).join(" AND ")}
      ORDER BY
        -- Önce eylem gerektirenler, sonra skora göre.
-       FIELD(status, 'needs_review', 'manual_required', 'queued', 'preparing', 'sent', 'failed', 'skipped'),
-       match_score DESC,
-       created_at DESC
+       FIELD(a.status, 'needs_review', 'manual_required', 'queued', 'preparing', 'sent', 'failed', 'skipped'),
+       a.match_score DESC,
+       a.created_at DESC
      LIMIT ?`,
     [...params, limit]
   );
@@ -379,6 +384,7 @@ function mapApplicationRow(row: mysql.RowDataPacket): JobApplication {
     listingLocation: row.listing_location ?? undefined,
     listingPlatform: row.listing_platform ?? undefined,
     listingUrl: String(row.listing_url ?? ""),
+    listingStatus: row.listing_status ? (String(row.listing_status) as "active" | "stale" | "expired") : undefined,
     matchScore: Number(row.match_score ?? 0),
     status: normalizeStatus(row.status),
     channel: row.channel === "email" ? "email" : "portal",

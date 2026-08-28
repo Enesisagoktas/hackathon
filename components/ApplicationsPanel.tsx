@@ -39,6 +39,8 @@ type JobApplication = {
   listingLocation?: string;
   listingPlatform?: string;
   listingUrl: string;
+  /** Bağlı ilanın güncel durumu; expired ise açma düğmesi uyarıya döner. */
+  listingStatus?: "active" | "stale" | "expired";
   matchScore: number;
   status: ApplicationStatus;
   channel: "email" | "portal";
@@ -319,12 +321,20 @@ function ApplicationRow({
           ) : null}
 
           {application.status === "manual_required" ? (
-            <a href={application.listingUrl} rel="noreferrer noopener" target="_blank">
-              <Button size="sm" type="button">
-                <ExternalLink className="mr-2 h-4 w-4" />
-                İlanı Aç
-              </Button>
-            </a>
+            application.listingStatus === "expired" ? (
+              // İlan yayından kalktıysa düğme kullanıcıyı boşa yormamalı:
+              // tıklayınca site ana sayfaya düşüyordu (kullanıcı bildirdi).
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-500">
+                İlan yayından kalktı
+              </span>
+            ) : (
+              <a href={application.listingUrl} rel="noreferrer noopener" target="_blank">
+                <Button size="sm" type="button">
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  İlanı Aç
+                </Button>
+              </a>
+            )
           ) : null}
 
           <Button size="sm" type="button" variant="ghost" onClick={onToggle}>

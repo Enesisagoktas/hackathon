@@ -135,6 +135,19 @@ const JOB_ADAPTERS: JobAdapter[] = [
       (/\/is-ilani\//.test(url.pathname) || /-i\d{5,}/.test(url.pathname))
   },
   {
+    platform: "Indeed TR",
+    category: "general",
+    buildSearchUrls: (query) => [`https://tr.indeed.com/jobs?q=${encodeURIComponent(query)}&l=T%C3%BCrkiye`],
+    // GERÇEK ilan detayı yalnızca /viewjob (jk parametresiyle) veya /rc/clk.
+    // Genel adaptör "/career/.../salaries/..." MAAŞ sayfalarını detay sanıyordu;
+    // kullanıcı "İlanı Aç" deyince ilan değil istatistik sayfası açılıyordu
+    // (ölçümle bulundu: cache'e 6 maaş sayfası ilan diye girmişti).
+    isDetailUrl: (url) =>
+      url.hostname.includes("indeed.com") &&
+      (url.pathname === "/viewjob" || url.pathname.startsWith("/rc/clk")) &&
+      (url.searchParams.has("jk") || url.pathname.startsWith("/rc/clk"))
+  },
+  {
     platform: "İşin Olsun",
     category: "general",
     buildSearchUrls: (query) => [`https://isinolsun.com/is-ilanlari?q=${encodeURIComponent(query)}`],
@@ -887,7 +900,24 @@ function readMetaTitle($: cheerio.CheerioAPI): string | undefined {
  *
  * Paylaşmıyorsa başlık büyük ihtimalle sayfadaki BAŞKA bir ilandan alınmıştır.
  */
+/**
+ * URL'leri kimlik taşımayan (UUID'li) ATS sunucuları.
+ *
+ * Bu adresler API'nin kendisinden gelir, karışık sayfadan kazınmaz; başlık
+ * kelimesi içermemeleri normaldir. Ölçüm: Spotify'ın Lever ilanları
+ * "başlık-URL uyuşmuyor" diye haksız işaretleniyordu.
+ */
+const ATS_OPAQUE_HOSTS = /(jobs\.lever\.co|greenhouse\.io|workable\.com|breezy\.hr|recruitee\.com)$/i;
+
 export function titleMatchesUrl(title: string, url: string): boolean {
+  try {
+    if (ATS_OPAQUE_HOSTS.test(new URL(url).hostname)) {
+      return true;
+    }
+  } catch {
+    return true;
+  }
+
   const titleWords = new Set(
     normalizeComparable(title)
       .split(" ")

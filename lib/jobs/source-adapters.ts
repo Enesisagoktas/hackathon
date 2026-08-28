@@ -23,7 +23,7 @@ const DETAIL_PATH_PATTERN =
 
 /** Detay sayfası OLMAYAN yollar: arama, kategori, kurumsal sayfalar. */
 const NON_DETAIL_PATTERN =
-  /\/(arama|search|kategori|category|firma|sirket|company|login|giris|kayit|register|blog|hakk\w+|iletisim|contact|cv-|uyelik)\b/i;
+  /\/(arama|search|kategori|category|firma|sirket|company|login|giris|kayit|register|blog|hakk\w+|iletisim|contact|cv-|uyelik|salaries?|maas(lar)?|cmp)\b/i;
 
 export function fillSearchTemplate(template: string, query: string): string {
   return template
