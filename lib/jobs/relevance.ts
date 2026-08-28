@@ -152,6 +152,12 @@ export function isListingRelatedToProfile(listing: CrawledJobListing, terms: str
  * başlığı "Sorry, you have been blocked" olan dört "ilan" üretilmişti.
  */
 const BLOCK_PAGE_PATTERNS = [
+  // Cloudflare'in TÜRKÇE ara sayfaları — ölçüm: Kariyer.net 9 kaydı
+  // "Bir dakika lütfen..." başlığıyla cache'e sokmuştu; kalıp listesinde
+  // yalnızca İngilizce varyantlar vardı.
+  /bir dakika l[üu]tfen/i,
+  /l[üu]tfen bekleyin/i,
+  /insan oldu[ğg]unuzu do[ğg]rula/i,
   /you have been blocked/i,
   /access denied/i,
   /attention required/i,

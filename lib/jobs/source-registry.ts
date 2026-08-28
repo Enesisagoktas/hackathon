@@ -376,7 +376,10 @@ export function scoreSourceForSelection(
   } else if (isGeneral) {
     score += 12;
   } else {
-    score -= 20; // alakasız niş kaynak (ör. hemşire aramasında tech board)
+    // Alakasız niş kaynak (ör. hemşire aramasında tech board): ceza, tazelik ve
+    // güvenilirlik bonuslarının TOPLAMINI aşacak kadar büyük olmalı; aksi hâlde
+    // hiç taranmamış bir tech board hemşire aramasına sızabiliyordu (test yakaladı).
+    score -= 60;
     reasons.push("meslek dışı");
   }
 

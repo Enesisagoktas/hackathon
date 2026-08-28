@@ -115,6 +115,14 @@ function JobCard({ result }: { result: JobSearchResult }) {
             <MatchScoreBadge score={result.matchScore} />
             {result.eligibility ? <EligibilityBadge eligibility={result.eligibility} /> : null}
             <span className="text-xs text-slate-500">{result.platform}</span>
+            {result.foundInSources && result.foundInSources.length > 1 ? (
+              <span
+                className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
+                title={result.foundInSources.join(", ")}
+              >
+                {result.foundInSources.length} kaynakta bulundu
+              </span>
+            ) : null}
             {result.workMode ? <span className="text-xs text-slate-400">{result.workMode}</span> : null}
           </div>
           <p className="mt-1 truncate font-semibold text-slate-950">{result.title}</p>

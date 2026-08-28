@@ -255,8 +255,8 @@ export async function searchJobListings(
     // bunların hepsini eler ve elde 0 ilan kalır. Ölçülen gerçek ihtiyaç
     // "kaç aday bulundu" değil "kaç uygun ilan çıktı"dır.
     if (options.allowLiveCrawl && results.length < LIVE_CRAWL_MIN_RESULTS) {
-      await stage("alternative-search", "running", "Platformlarda canlı tarama yapılıyor");
-      liveCrawlNote = await runLiveCrawl(profile);
+      await stage("alternative-search", "running", "Kaynaklar dalga dalga taranıyor");
+      liveCrawlNote = await runLiveCrawl(profile, (key, status, detail) => stage(key, status, detail));
       await stage("alternative-search", "done", liveCrawlNote.trim() || "Canlı tarama tamamlandı");
 
       // Tekrar skorlanmayacaklar YALNIZCA AI'nın fiilen karar verdikleridir.
@@ -295,7 +295,14 @@ export async function searchJobListings(
       );
     }
 
-    results = deduped.unique;
+    // §11 — Kanonik ilan: aynı ilanın görüldüğü tüm kaynaklar birincil kayda
+    // işlenir; kullanıcı tek ilan görür, altında "N kaynakta bulundu" yazar.
+    results = deduped.groups.map((group) => {
+      const sources = Array.from(
+        new Set([group.primary, ...group.duplicates].map((item) => String(item.platform)))
+      );
+      return sources.length > 1 ? { ...group.primary, foundInSources: sources } : group.primary;
+    });
 
     await stage("match", "done", `${results.length} ilan uygunluk analizinden geçti${deduped.removed ? `, ${deduped.removed} kopya birleştirildi` : ""}`, {
       eliminated: Math.max(0, totalCandidates - results.length),
@@ -349,7 +356,29 @@ export async function searchJobListings(
  * Canlı crawler'ı çalıştırır, bulunan ilanları cache'e yazar.
  * Hata tüm aramayı düşürmez; kullanıcıya not olarak yansır.
  */
-async function runLiveCrawl(profile: CandidateProfile): Promise<string> {
+/** Kaynak sınıfı → kullanıcıya gösterilecek Türkçe etiket (§14). */
+const COVERAGE_LABELS: Record<string, string> = {
+  "general-board": "genel",
+  "niche-board": "niş",
+  "startup-board": "startup",
+  "company-career": "şirket kariyer",
+  ats: "ATS",
+  government: "kamu",
+  university: "üniversite",
+  techpark: "teknokent",
+  aggregator: "toplayıcı",
+  "regional-board": "bölgesel",
+  "remote-board": "remote",
+  github: "GitHub"
+};
+
+type StageReporter = (
+  key: "alternative-search" | "boutique-search",
+  status: "running" | "done",
+  detail?: string
+) => Promise<void> | void;
+
+async function runLiveCrawl(profile: CandidateProfile, reportStage?: StageReporter): Promise<string> {
   try {
     console.log(
       `[searchJobListings] Cache'te "${profile.targetRole}" için yeterli aday yok; canlı tarama başlıyor...`
@@ -357,7 +386,22 @@ async function runLiveCrawl(profile: CandidateProfile): Promise<string> {
 
     const { crawlJobs } = await import("@/lib/jobs/crawler");
     const { upsertJobListing } = await import("@/lib/jobs/repository");
-    const crawlResult = await crawlJobs(profile);
+
+    // §12/§22 — Dalgalar arayüzdeki aşamalara eşlenir: dalga 1-2 "alternatif
+    // pozisyonlar", dalga 3-4 "butik ve şirket kaynakları". Kullanıcı hangi
+    // kaynak sınıfının tarandığını canlı görür.
+    const crawlResult = await crawlJobs(profile, {
+      onWave: async (wave, note) => {
+        if (!reportStage) {
+          return;
+        }
+        if (wave <= 2) {
+          await reportStage("alternative-search", "running", `Dalga ${wave}: ${note}`);
+        } else {
+          await reportStage("boutique-search", "running", `Dalga ${wave}: ${note}`);
+        }
+      }
+    });
 
     let saved = 0;
     for (const listing of crawlResult.listings) {
@@ -388,9 +432,16 @@ async function runLiveCrawl(profile: CandidateProfile): Promise<string> {
     const okPlatforms = crawlResult.statuses.filter((status) => status.parsedListings > 0).length;
     console.log(`[searchJobListings] Canlı tarama bitti: ${saved} ilan cache'e eklendi (${okPlatforms} platform).`);
 
+    // §14 — Kapsama özeti: hangi kaynak sınıfları tarandı. Dar kapsam gizlenmez.
+    const coverageNote = crawlResult.coverage?.length
+      ? ` Kapsam: ${crawlResult.coverage
+          .map((entry) => `${COVERAGE_LABELS[entry.sourceType] ?? entry.sourceType} ${entry.succeeded}/${entry.scanned}`)
+          .join(", ")}.`
+      : "";
+
     return saved > 0
-      ? ` Canlı taramayla ${saved} güncel ilan eklendi.`
-      : " Canlı tarama yapıldı ancak platformlardan yeni ilan alınamadı.";
+      ? ` Canlı taramayla ${okPlatforms} kaynaktan ${saved} güncel ilan eklendi.${coverageNote}`
+      : ` Canlı tarama yapıldı ancak kaynaklardan yeni ilan alınamadı.${coverageNote}`;
   } catch (error) {
     console.error("[searchJobListings] Canlı tarama hata verdi:", error);
     return " Canlı tarama bu turda tamamlanamadı.";

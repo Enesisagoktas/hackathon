@@ -7,6 +7,7 @@ import { titleMatchesUrl } from "../lib/jobs/crawler";
 import { dedupeListings } from "../lib/jobs/dedupe";
 import { looksLikeBlockedPage } from "../lib/jobs/relevance";
 import { listSourceHealth, VERDICT_LABELS, verdictFor } from "../lib/jobs/source-health";
+import { listSources } from "../lib/jobs/source-registry";
 
 /**
  * §24 — Sistemi "kaç ilan buldu?" ile değil kalite metrikleriyle ölçer.
@@ -179,6 +180,38 @@ async function main() {
   } else {
     report("Son arama sonuçları", "tamamlanan arama yok", "en az 1", false, true);
   }
+
+  // ── 5b. Kaynak çeşitliliği (§6) ve kaynak evreni (§3) ──
+  const registry = await listSources().catch(() => []);
+  const activeSources = registry.filter((source) => source.status === "active");
+  const contributed = registry.filter((source) => source.newJobsFound > 0);
+
+  report(
+    "Kaynak evreni",
+    `${registry.length} kaynak (${activeSources.length} aktif, ${contributed.length} ilan üretmiş)`,
+    "büyüyen evren, ≥5 üretken kaynak",
+    contributed.length >= 5,
+    contributed.length >= 3
+  );
+
+  // Aktif cache'e katkı veren kaynak dağılımı: tek kaynağın payı %70'i aşmamalı.
+  const [sourceDist] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT s.name, COUNT(*) n FROM job_listings l
+     JOIN job_sources s ON s.id = l.source_id
+     WHERE l.status = 'active' GROUP BY s.name ORDER BY n DESC`
+  );
+  const totalBySource = sourceDist.reduce((sum, row) => sum + Number(row.n), 0);
+  const topShare = totalBySource ? Number(sourceDist[0]?.n ?? 0) / totalBySource : 0;
+
+  report(
+    "Kaynak çeşitliliği (cache)",
+    sourceDist.length
+      ? `${sourceDist.length} kaynak; en büyük pay ${sourceDist[0].name} %${Math.round(topShare * 100)}`
+      : "veri yok",
+    "tek kaynak ≤70%",
+    sourceDist.length >= 3 && topShare <= 0.7,
+    topShare <= 0.85
+  );
 
   // ── 6. Başvuru sağlığı ────────────────────────────────────────────────
   const [apps] = await pool.query<mysql.RowDataPacket[]>(

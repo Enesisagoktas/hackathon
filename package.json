@@ -26,11 +26,14 @@
     "test:title": "tsx scripts/test-title-guard.ts",
     "test:dedupe": "tsx scripts/test-dedupe.ts",
     "test:health": "tsx scripts/test-source-health.ts",
+    "test:registry": "tsx scripts/test-source-registry.ts",
     "health:sources": "tsx scripts/source-health.ts",
     "quality": "tsx scripts/quality-report.ts",
+    "discover:sources": "tsx scripts/discover-sources.ts",
+    "sources:list": "tsx scripts/list-sources.ts",
     "audit:eligibility": "tsx scripts/audit-eligibility.ts",
     "cleanup:listings": "tsx scripts/cleanup-listings.ts",
-    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search && npm run test:requirements && npm run test:eligibility && npm run test:progress && npm run test:title && npm run test:dedupe && npm run test:health"
+    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search && npm run test:requirements && npm run test:eligibility && npm run test:progress && npm run test:title && npm run test:dedupe && npm run test:health && npm run test:registry"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

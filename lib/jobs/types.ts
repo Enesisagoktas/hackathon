@@ -128,6 +128,11 @@ export type JobSearchResult = {
   candidateCriteria?: string[];
   /** §11 — Katmanlı uygunluk sonucu; eleme ve sıralama buna dayanır. */
   eligibility?: EligibilitySummary;
+  /**
+   * §11 — Aynı ilanın görüldüğü kaynaklar (kanonik gösterim).
+   * Birden fazlaysa kart "N kaynakta bulundu" rozeti gösterir.
+   */
+  foundInSources?: string[];
 };
 
 /**

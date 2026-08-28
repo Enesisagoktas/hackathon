@@ -340,6 +340,8 @@ export type DedupeOutcome<T extends DedupableListing> = {
   unique: T[];
   /** Kaç kayıt kopya olduğu için çıkarıldı. */
   removed: number;
+  /** §11 — Her benzersiz ilanın görüldüğü grup; kaynak sayısı buradan okunur. */
+  groups: DuplicateGroup<T>[];
 };
 
 /** Kopyaları çıkarır; her gruptan en zengin kayıt kalır. */
@@ -347,5 +349,5 @@ export function dedupeListings<T extends DedupableListing>(listings: T[]): Dedup
   const groups = groupDuplicates(listings, richestListing);
   const unique = groups.map((group) => group.primary);
 
-  return { unique, removed: listings.length - unique.length };
+  return { unique, removed: listings.length - unique.length, groups };
 }
