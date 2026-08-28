@@ -19,6 +19,14 @@ import {
 } from "@/lib/jobs/normalize";
 import { filterListingsByProfile } from "@/lib/jobs/relevance";
 import { recordCrawlResult } from "@/lib/jobs/source-health";
+import { buildGenericAdapter, fetchStructuredSource } from "@/lib/jobs/source-adapters";
+import {
+  recordSourceScan,
+  selectSourcesForRun,
+  type SelectedSource,
+  type SourceWave
+} from "@/lib/jobs/source-registry";
+import type { CoverageEntry } from "@/lib/jobs/types";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 CVMatchBot/1.0";
@@ -127,6 +135,18 @@ const JOB_ADAPTERS: JobAdapter[] = [
       (/\/is-ilani\//.test(url.pathname) || /-i\d{5,}/.test(url.pathname))
   },
   {
+    platform: "İşin Olsun",
+    category: "general",
+    buildSearchUrls: (query) => [`https://isinolsun.com/is-ilanlari?q=${encodeURIComponent(query)}`],
+    // Detay: /is-ilani/{slug}-{uzunHexId} (TEKİL "is-ilani").
+    // /is-ilanlari/{kategori} sayfaları detay DEĞİLDİR — genel adaptör bunları
+    // detay sanıp bütçeyi kategori sayfalarına harcıyordu (ölçümle bulundu).
+    isDetailUrl: (url) =>
+      url.hostname.includes("isinolsun.com") &&
+      /^\/is-ilani\//.test(url.pathname) &&
+      /[0-9A-Za-z]{12,}$/.test(url.pathname)
+  },
+  {
     platform: "Yenibiriş",
     category: "general",
     buildSearchUrls: (query) => [`https://www.yenibiris.com/is-ilanlari?kelime=${encodeURIComponent(query)}`],
@@ -181,25 +201,201 @@ function getActiveAdapters(): JobAdapter[] {
   return JOB_ADAPTERS.filter((adapter) => adapter.platform !== "LinkedIn" || ENABLE_LINKEDIN);
 }
 
-export async function crawlJobs(profile: CandidateProfile): Promise<CrawlJobsResult> {
+export type CrawlJobsOptions = {
+  /** Registry seçiminden gelen kaynaklar; verilmezse burada seçilir. */
+  sources?: SelectedSource[];
+  /** Her dalga bittiğinde çağrılır — §12/§22 ilerleme göstergesi için. */
+  onWave?: (wave: SourceWave, note: string) => void | Promise<void>;
+};
+
+type SourceCrawlOutcome = {
+  listings: CrawledJobListing[];
+  status: PlatformCrawlStatus;
+  sourceType: string;
+};
+
+/**
+ * Tek bir registry kaynağını tarar: yapılandırılmış (JSON API / RSS) kaynaklar
+ * doğrudan okunur, HTML kaynaklar varsa özel adaptörle yoksa genel adaptörle
+ * gezilir. Sonuç metrikleri registry'ye işlenir (§4-§5 rotasyon bunlardan beslenir).
+ */
+async function crawlRegistrySource(
+  source: SelectedSource,
+  queries: string[],
+  profile: CandidateProfile,
+  deadlineAt: number,
+  dedicated: Map<string, JobAdapter>
+): Promise<SourceCrawlOutcome> {
+  // ─ Yapılandırılmış kaynak: HTML ayrıştırma yok, doğrudan veri ─
+  if (source.accessMethod === "json-api" || source.accessMethod === "rss") {
+    try {
+      const outcome = await fetchStructuredSource(source, queries);
+      const { kept, dropped } = filterListingsByProfile(outcome.listings, profile);
+      const rateLimited = outcome.status === 429 || outcome.status === 503;
+
+      await recordSourceScan(source.name, {
+        succeeded: outcome.listings.length > 0,
+        newJobs: outcome.listings.length,
+        relevantJobs: kept.length,
+        invalidJobs: 0,
+        duplicateJobs: 0,
+        rateLimited
+      });
+
+      return {
+        listings: kept,
+        sourceType: source.sourceType,
+        status: {
+          platform: source.name,
+          status: outcome.listings.length ? "success" : rateLimited ? "failed" : "empty",
+          searchedUrls: 1,
+          discoveredUrls: outcome.fetched,
+          parsedListings: outcome.listings.length,
+          relevantListings: kept.length,
+          message: rateLimited
+            ? "Kaynak hız sınırı uyguladı."
+            : outcome.status !== 200
+              ? `API ${outcome.status} döndürdü.`
+              : dropped.length && !kept.length
+                ? `${outcome.listings.length} ilan okundu ama sorguyla ilgili değildi.`
+                : undefined
+        }
+      };
+    } catch (error) {
+      await recordSourceScan(source.name, {
+        succeeded: false, newJobs: 0, relevantJobs: 0, invalidJobs: 0, duplicateJobs: 0
+      });
+      return {
+        listings: [],
+        sourceType: source.sourceType,
+        status: {
+          platform: source.name,
+          status: "failed",
+          searchedUrls: 1,
+          discoveredUrls: 0,
+          parsedListings: 0,
+          relevantListings: 0,
+          message: error instanceof Error ? error.message.slice(0, 120) : "okunamadı"
+        }
+      };
+    }
+  }
+
+  // ─ HTML kaynağı: özel adaptör varsa o, yoksa genel adaptör ─
+  const adapter = dedicated.get(source.name) ?? buildGenericAdapter(source);
+  const result = await crawlAdapter(adapter, queries, profile, deadlineAt, {
+    intervalMs: source.rateLimitMs,
+    preferBrowser: source.browserRequired
+  });
+
+  await recordSourceScan(source.name, {
+    succeeded: result.status.parsedListings > 0,
+    newJobs: result.status.parsedListings,
+    relevantJobs: result.status.relevantListings,
+    invalidJobs: 0,
+    duplicateJobs: 0,
+    rateLimited: result.rateLimited
+  });
+
+  return { listings: result.listings, status: result.status, sourceType: source.sourceType };
+}
+
+/** §14 — Hangi kaynak sınıfları tarandı, hangileri sonuç verdi? */
+function computeCoverage(outcomes: SourceCrawlOutcome[]): CoverageEntry[] {
+  const byType = new Map<string, { scanned: number; succeeded: number }>();
+
+  for (const outcome of outcomes) {
+    const entry = byType.get(outcome.sourceType) ?? { scanned: 0, succeeded: 0 };
+    entry.scanned += 1;
+    if (outcome.status.parsedListings > 0) {
+      entry.succeeded += 1;
+    }
+    byType.set(outcome.sourceType, entry);
+  }
+
+  return Array.from(byType.entries()).map(([sourceType, counts]) => ({ sourceType, ...counts }));
+}
+
+export async function crawlJobs(
+  profile: CandidateProfile,
+  options: CrawlJobsOptions = {}
+): Promise<CrawlJobsResult> {
   const queries = buildCrawlQueries(profile);
   const deadlineAt = Date.now() + crawlerDeadlineMs();
-  const adapterResults = await runLimited(
-    getActiveAdapters().map((adapter) => () => {
-      console.log(`[Crawler] Starting platform: ${adapter.platform}...`);
-      return crawlAdapter(adapter, queries, profile, deadlineAt);
-    }),
-    Math.max(1, maxConcurrentPlatforms())
+
+  // Kaynaklar registry'den seçilir (§5 rotasyon). Registry erişilemezse arama
+  // durmaz: sabit adaptör listesi yedek olarak devrededir.
+  let sources = options.sources ?? null;
+
+  if (!sources) {
+    sources = await selectSourcesForRun(profile).catch((error) => {
+      console.warn(
+        "[crawler] Registry seçimi başarısız, sabit adaptörlere düşülüyor:",
+        error instanceof Error ? error.message : error
+      );
+      return null;
+    });
+  }
+
+  if (!sources || !sources.length) {
+    const adapterResults = await runLimited(
+      getActiveAdapters().map((adapter) => () => crawlAdapter(adapter, queries, profile, deadlineAt)),
+      Math.max(1, maxConcurrentPlatforms())
+    );
+    const listings = uniqListings(adapterResults.flatMap((result) => result.listings));
+    const statuses = adapterResults.map((result) => result.status);
+    await Promise.all(statuses.map((status) => recordCrawlResult(status)));
+    return { listings, statuses };
+  }
+
+  console.log(
+    `[crawler] ${sources.length} kaynak seçildi: ${sources.map((item) => `${item.name}(d${item.wave})`).join(", ")}`
   );
 
-  const listings = uniqListings(adapterResults.flatMap((result) => result.listings));
-  const statuses = adapterResults.map((result) => result.status);
+  const dedicated = new Map(JOB_ADAPTERS.map((adapter) => [adapter.platform, adapter] as const));
+  const outcomes: SourceCrawlOutcome[] = [];
+
+  // §12 — Dalgalar sırayla akar: öncelikli kaynaklar → TR alternatifleri →
+  // global/niş → ATS/keşfedilen. Süre biterse kalan dalgalar atlanır ama
+  // eldeki sonuçlar korunur.
+  for (const wave of [1, 2, 3, 4] as SourceWave[]) {
+    const waveSources = sources.filter((source) => source.wave === wave);
+
+    if (!waveSources.length) {
+      continue;
+    }
+
+    if (isDeadlineExceeded(deadlineAt)) {
+      console.log(`[crawler] Süre doldu; dalga ${wave} ve sonrası atlandı.`);
+      break;
+    }
+
+    const waveResults = await runLimited(
+      waveSources.map((source) => () => {
+        console.log(`[Crawler] Kaynak: ${source.name} (dalga ${wave}, ${source.selectionReason})`);
+        return crawlRegistrySource(source, queries, profile, deadlineAt, dedicated);
+      }),
+      Math.max(1, maxConcurrentPlatforms())
+    );
+
+    outcomes.push(...waveResults);
+
+    const found = waveResults.reduce((sum, item) => sum + item.status.relevantListings, 0);
+    try {
+      await options.onWave?.(wave, `${waveSources.length} kaynak tarandı, ${found} uygun ilan`);
+    } catch {
+      // İlerleme bildirimi taramayı düşürmez.
+    }
+  }
+
+  const listings = uniqListings(outcomes.flatMap((outcome) => outcome.listings));
+  const statuses = outcomes.map((outcome) => outcome.status);
 
   // §6 — Her taramanın sonucu kaydedilir; böylece bir kaynağın sessizce
   // bozulması tahminle değil ölçümle görülür. Kayıt hatası aramayı düşürmez.
   await Promise.all(statuses.map((status) => recordCrawlResult(status)));
 
-  return { listings, statuses };
+  return { listings, statuses, coverage: computeCoverage(outcomes) };
 }
 
 /**
@@ -257,12 +453,20 @@ function buildCrawlQueries(profile: CandidateProfile) {
   return uniq(allQueries.filter((query) => query.length >= 3)).slice(0, 12);
 }
 
+type AdapterCrawlOptions = {
+  /** Kaynağa özel istekler arası bekleme (ms). */
+  intervalMs?: number;
+  /** JS gerektiren kaynaklarda arama sayfası doğrudan tarayıcıyla açılır. */
+  preferBrowser?: boolean;
+};
+
 async function crawlAdapter(
   adapter: JobAdapter,
   queries: string[],
   profile: CandidateProfile,
-  deadlineAt: number
-): Promise<{ listings: CrawledJobListing[]; status: PlatformCrawlStatus }> {
+  deadlineAt: number,
+  crawlOptions: AdapterCrawlOptions = {}
+): Promise<{ listings: CrawledJobListing[]; status: PlatformCrawlStatus; rateLimited?: boolean }> {
   const startedStatus: PlatformCrawlStatus = {
     platform: adapter.platform,
     status: "empty",
@@ -293,6 +497,7 @@ async function crawlAdapter(
     );
     const discoveredByUrl = new Map<string, string>();
     let hitDeadline = false;
+    let rateLimited = false;
 
     for (const searchUrl of searchUrls) {
       if (isDeadlineExceeded(deadlineAt)) {
@@ -300,13 +505,23 @@ async function crawlAdapter(
         break;
       }
 
-      const page = await fetchPlatformHtml(adapter.platform, searchUrl, deadlineAt).catch((error) => {
+      const page = await fetchPlatformHtml(adapter.platform, searchUrl, deadlineAt, {
+        forceBrowser: crawlOptions.preferBrowser,
+        intervalMs: crawlOptions.intervalMs
+      }).catch((error) => {
         if (error instanceof CrawlDeadlineError) {
           hitDeadline = true;
         }
 
-        return { html: "", finalUrl: searchUrl };
+        return { html: "", finalUrl: searchUrl } as FetchedPage;
       });
+
+      // §13 — 429/503: kaynak "yavaşla" diyor; bu turda daha fazla istek
+      // atmak yasak. Kaynak işaretlenir ve backoff registry'ye yazılır.
+      if (page.status === 429 || page.status === 503) {
+        rateLimited = true;
+        break;
+      }
 
       if (!page.html) {
         continue;
@@ -330,7 +545,8 @@ async function crawlAdapter(
       // işlenemiyor, platform her aramada 0 ilan döndürüyordu.
       if (!listingUrls.length && !isDeadlineExceeded(deadlineAt)) {
         const rendered = await fetchPlatformHtml(adapter.platform, searchUrl, deadlineAt, {
-          forceBrowser: true
+          forceBrowser: true,
+          intervalMs: crawlOptions.intervalMs
         }).catch((error) => {
           if (error instanceof CrawlDeadlineError) {
             hitDeadline = true;
@@ -368,7 +584,9 @@ async function crawlAdapter(
           return null;
         }
 
-        const detail = await fetchPlatformHtml(adapter.platform, url, deadlineAt).catch((error) => {
+        const detail = await fetchPlatformHtml(adapter.platform, url, deadlineAt, {
+          intervalMs: crawlOptions.intervalMs
+        }).catch((error) => {
           if (error instanceof CrawlDeadlineError) {
             hitDeadline = true;
           }
@@ -411,14 +629,17 @@ async function crawlAdapter(
 
     return {
       listings,
+      rateLimited,
       status: {
         ...startedStatus,
-        status: crawlStatus,
+        status: rateLimited && !parsed.length ? "failed" : crawlStatus,
         searchedUrls: searchUrls.length,
         discoveredUrls: discoveredByUrl.size,
         parsedListings: parsed.length,
         relevantListings: listings.length,
-        message: hitDeadline
+        message: rateLimited
+          ? "Kaynak hız sınırı uyguladı (429); bekleme süresi artırıldı, bu tur atlandı."
+          : hitDeadline
           ? "Crawler süre sınırına ulaştı; eldeki ilanlarla devam edildi."
           : parsed.length && !listings.length
             ? `${parsed.length} ilan okundu ama hiçbiri bu aramayla ilgili değildi.`
@@ -447,7 +668,7 @@ async function fetchPlatformHtml(
   platform: JobPlatform,
   url: string,
   deadlineAt: number,
-  options: { forceBrowser?: boolean } = {}
+  options: { forceBrowser?: boolean; intervalMs?: number } = {}
 ) {
   let state = platformRequestQueues.get(platform);
 
@@ -460,7 +681,10 @@ async function fetchPlatformHtml(
     assertWithinDeadline(deadlineAt);
 
     const elapsed = Date.now() - state.lastRequestAt;
-    const waitMs = state.lastRequestAt ? Math.max(0, platformRequestIntervalMs() - elapsed) : 0;
+    // §13 — Her kaynağın kendi hız sınırı vardır; registry'deki rate_limit_ms
+    // buradan uygulanır. 429 gören kaynağın aralığı kalıcı olarak artar (backoff).
+    const interval = options.intervalMs ?? platformRequestIntervalMs();
+    const waitMs = state.lastRequestAt ? Math.max(0, interval - elapsed) : 0;
 
     if (waitMs > 0) {
       const remainingMs = deadlineAt - Date.now();
@@ -482,12 +706,18 @@ async function fetchPlatformHtml(
   return request;
 }
 
-export type FetchedPage = { html: string; finalUrl: string };
+export type FetchedPage = { html: string; finalUrl: string; status?: number };
 
 async function fetchHtml(url: string, options: { forceBrowser?: boolean } = {}): Promise<FetchedPage> {
-  const regular = options.forceBrowser
+  const regular: FetchedPage = options.forceBrowser
     ? { html: "", finalUrl: url }
     : await fetchHtmlRegular(url).catch(() => ({ html: "", finalUrl: url }));
+
+  // 429/503: kaynağı daha fazla zorlamak yasaktır (§13) — tarayıcıyla tekrar
+  // denemek de bir zorlamadır; durum yukarı taşınır ve kaynak bu tur atlanır.
+  if (regular.status === 429 || regular.status === 503) {
+    return regular;
+  }
 
   if (regular.html && regular.html.length > 500) {
     return regular;
@@ -530,10 +760,10 @@ async function fetchHtmlRegular(url: string) {
     });
 
     if (!response.ok) {
-      return { html: "", finalUrl: response.url || url };
+      return { html: "", finalUrl: response.url || url, status: response.status };
     }
 
-    return { html: await response.text(), finalUrl: response.url || url };
+    return { html: await response.text(), finalUrl: response.url || url, status: response.status };
   } finally {
     clearTimeout(timeout);
   }

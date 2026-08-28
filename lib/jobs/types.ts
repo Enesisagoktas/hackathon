@@ -4,16 +4,12 @@ import type { LocationMode, WorkMode } from "@/lib/search-preferences";
  * Known platforms get autocomplete, but DB-sourced names (e.g. crawler or
  * sample data) may introduce others, so any string is also accepted.
  */
-export type JobPlatform =
-  | "Kariyer.net"
-  | "Secretcv"
-  | "Eleman.net"
-  | "Yenibiriş"
-  | "Toptalent"
-  | "Webrazzi Jobs"
-  | "LinkedIn"
-  | "İŞKUR"
-  | (string & {});
+/**
+ * Kaynak adı. Eskiden 8 platformluk kapalı bir birlikti; kaynak evreni
+ * Source Registry ile dinamik büyüdüğü için (§1-3) artık serbest metindir.
+ * Kayıtlı kaynakların tek doğru listesi source_registry tablosudur.
+ */
+export type JobPlatform = string;
 
 export type JobResultCategory = "recommended" | "general" | "tech" | "public";
 export type JobResultKind = "search" | "job";
@@ -279,7 +275,16 @@ export type PlatformSelectors = {
   date?: string[];
 };
 
+/** §14 — Bir taramada hangi kaynak sınıflarının kontrol edildiği. */
+export type CoverageEntry = {
+  sourceType: string;
+  scanned: number;
+  succeeded: number;
+};
+
 export type CrawlJobsResult = {
   listings: CrawledJobListing[];
   statuses: PlatformCrawlStatus[];
+  /** Kaynak sınıfı kapsaması; dar kapsam aramayı "tamamlandı" saymamalı. */
+  coverage?: CoverageEntry[];
 };
