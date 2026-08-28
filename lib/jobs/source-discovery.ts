@@ -4,6 +4,7 @@ import { getDbPool } from "@/lib/db";
 import { slugify } from "@/lib/jobs/normalize";
 import { normalizeCompany } from "@/lib/jobs/dedupe";
 import {
+  demoteFailingSources,
   ensureSourceRegistrySchema,
   listSources,
   registerCandidateSource,
@@ -274,8 +275,11 @@ export async function validateCandidateSources(options: { limit?: number } = {})
 
 /** Keşif + doğrulama tek girişte; crawl penceresinin 4. dalgasından da çağrılabilir. */
 export async function runDiscoveryCycle(options: { maxProbes?: number } = {}): Promise<DiscoveryOutcome> {
+  // §5 — önce hiç başaramayanlar havuzdan iner; ardından doğrulama, gerçekten
+  // çalışanları (yanlış indirilmiş olanlar dahil) geri getirir.
+  const demoted = await demoteFailingSources();
   const ats = await discoverAtsSources({ maxProbes: options.maxProbes ?? 12 });
-  const validation = await validateCandidateSources({ limit: 8 });
+  const validation = await validateCandidateSources({ limit: Math.max(8, demoted.length) });
 
   return {
     probed: ats.probed + validation.probed,

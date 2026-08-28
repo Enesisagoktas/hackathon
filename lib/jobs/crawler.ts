@@ -233,9 +233,13 @@ async function crawlRegistrySource(
       const { kept, dropped } = filterListingsByProfile(outcome.listings, profile);
       const rateLimited = outcome.status === 429 || outcome.status === 503;
 
+      // "Kaynak çalışıyor" ile "sorguya uygun ilan var" AYRI şeylerdir (HTML
+      // tarafındaki parsedListings/relevantListings ayrımının aynısı). Ölçüm:
+      // Greenhouse: Peak 45 ilan okudu ama sorguya uyan çıkmadığı için "Bozuk"
+      // işaretleniyordu. Sağlık, API'nin çalışıp kayıt döndürmesine bakar.
       await recordSourceScan(source.name, {
-        succeeded: outcome.listings.length > 0,
-        newJobs: outcome.listings.length,
+        succeeded: outcome.status === 200,
+        newJobs: outcome.fetched,
         relevantJobs: kept.length,
         invalidJobs: 0,
         duplicateJobs: 0,
@@ -247,17 +251,17 @@ async function crawlRegistrySource(
         sourceType: source.sourceType,
         status: {
           platform: source.name,
-          status: outcome.listings.length ? "success" : rateLimited ? "failed" : "empty",
+          status: outcome.fetched > 0 ? "success" : rateLimited ? "failed" : outcome.status === 200 ? "empty" : "failed",
           searchedUrls: 1,
           discoveredUrls: outcome.fetched,
-          parsedListings: outcome.listings.length,
+          parsedListings: outcome.fetched,
           relevantListings: kept.length,
           message: rateLimited
             ? "Kaynak hız sınırı uyguladı."
             : outcome.status !== 200
               ? `API ${outcome.status} döndürdü.`
-              : dropped.length && !kept.length
-                ? `${outcome.listings.length} ilan okundu ama sorguyla ilgili değildi.`
+              : outcome.fetched > 0 && !kept.length
+                ? `${outcome.fetched} ilan okundu ama sorguyla ilgili değildi.`
                 : undefined
         }
       };

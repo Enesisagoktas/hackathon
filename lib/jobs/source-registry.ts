@@ -582,3 +582,40 @@ export async function setSourceStatus(name: string, status: SourceStatus, note?:
     [status, note ?? null, name]
   );
 }
+
+/**
+ * §5 — Hiç başaramayan kaynakları aktif havuzdan indirir.
+ *
+ * En az `minScans` taramada bir kez bile ilan üretememiş kaynak üretim
+ * rotasyonundan çıkar (candidate olur). Keşif döngüsü candidate'ları yeniden
+ * doğrular: gerçekten çalışan geri gelir, çalışmayan dead'e gider. Böylece
+ * "çalışan kaynak oranı" metriği, fiilen KULLANILAN havuzu ölçer; iyimser
+ * tohumlar sonsuza dek bozuk sayılmaz.
+ *
+ * Başlangıç önceliği (1-5) asla indirilmez — §1 bu beş kaynağın her aramada
+ * denenmesini şart koşar; sağlıkları yine de izlenir.
+ */
+export async function demoteFailingSources(minScans = 2): Promise<string[]> {
+  await ensureSourceRegistrySchema();
+  const pool = getDbPool();
+
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `SELECT name FROM source_registry
+     WHERE status = 'active' AND priority > 5
+       AND total_scans >= ? AND successful_scans = 0`,
+    [minScans]
+  );
+
+  const names = rows.map((row) => String(row.name));
+
+  if (names.length) {
+    await pool.query(
+      `UPDATE source_registry SET status = 'candidate'
+       WHERE name IN (${names.map(() => "?").join(", ")})`,
+      names
+    );
+    console.log(`[registry] ${names.length} kaynak üretim havuzundan indirildi: ${names.join(", ")}`);
+  }
+
+  return names;
+}

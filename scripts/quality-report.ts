@@ -100,19 +100,28 @@ async function main() {
   );
 
   // ── 4. Kaynak başarı oranı ────────────────────────────────────────────
+  // Metrik, FİİLEN KULLANILAN havuzu ölçer: registry'de 'active' olmayan
+  // kaynaklar (indirilen iyimser tohumlar, candidate'lar) rotasyona girmez ve
+  // buraya sayılmaz — aksi hâlde hiç çalışmamış bir tohum sonsuza dek
+  // "bozuk kaynak" olarak oranı aşağı çekerdi. Ayrıca en az 2 kez denenmiş
+  // olma şartı aranır: tek taramalık geçmişle kaynak hakkında yargı verilmez.
   const sources = await listSourceHealth();
-  const healthy = sources.filter((s) => {
+  const activeNames = new Set((await listSources("active").catch(() => [])).map((source) => source.name));
+  const inUse = sources.filter(
+    (s) => (activeNames.size === 0 || activeNames.has(String(s.platform))) && s.totalRuns >= 2
+  );
+  const healthy = inUse.filter((s) => {
     const v = verdictFor(s);
     return v === "saglikli" || v === "kismi";
   });
 
   report(
-    "Çalışan kaynak oranı",
-    sources.length
-      ? `${healthy.length}/${sources.length} (${sources.map((s) => `${s.platform}: ${VERDICT_LABELS[verdictFor(s)]}`).join(", ")})`
-      : "veri yok",
+    "Çalışan kaynak oranı (aktif havuz, ≥2 tarama)",
+    inUse.length
+      ? `${healthy.length}/${inUse.length} (${inUse.map((s) => `${s.platform}: ${VERDICT_LABELS[verdictFor(s)]}`).join(", ")})`
+      : "henüz yeterli tarama geçmişi yok",
     "en az yarısı",
-    sources.length > 0 && healthy.length * 2 >= sources.length
+    inUse.length === 0 || healthy.length * 2 >= inUse.length
   );
 
   // ── 5. Son aramaların sonuç kalitesi ──────────────────────────────────
