@@ -22,14 +22,31 @@ import { recordCrawlResult } from "@/lib/jobs/source-health";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 CVMatchBot/1.0";
-const FETCH_TIMEOUT_MS = Number(process.env.CRAWLER_FETCH_TIMEOUT_MS ?? 9000);
-const FETCH_HARD_TIMEOUT_MS = Number(process.env.CRAWLER_FETCH_HARD_TIMEOUT_MS ?? FETCH_TIMEOUT_MS * 2 + 8000);
-const MAX_SEARCH_URLS_PER_PLATFORM = Number(process.env.CRAWLER_MAX_SEARCH_URLS_PER_PLATFORM ?? 2);
-const MAX_DETAILS_PER_PLATFORM = Number(process.env.CRAWLER_MAX_DETAILS_PER_PLATFORM ?? 4);
-const MAX_CONCURRENT_PLATFORMS = Number(process.env.CRAWLER_MAX_CONCURRENT_PLATFORMS ?? 6);
-const MAX_CONCURRENT_DETAILS = Number(process.env.CRAWLER_MAX_CONCURRENT_DETAILS ?? 3);
-const PLATFORM_REQUEST_INTERVAL_MS = Number(process.env.CRAWLER_PLATFORM_REQUEST_INTERVAL_MS ?? 2000);
-const CRAWLER_DEADLINE_MS = Number(process.env.CRAWLER_DEADLINE_MS ?? 90000);
+/**
+ * Tarama bütçesi ayarları ÇAĞRI ANINDA okunur, modül yüklenirken değil.
+ *
+ * NEDEN: `import` deyimleri hoist edilir ve `dotenv.config()` çağrılmadan
+ * önce çalışır. Ayarlar modül seviyesinde `const` olarak okunduğunda
+ * komut satırı betıklerinde .env HENÜZ YÜKLENMEMİŞ oluyor ve değerler
+ * sessizce varsayılana düşüyordu. Ölçüm: `CRAWLER_MAX_DETAILS_PER_PLATFORM=20`
+ * ayarlanmış olmasına rağmen her platform tam olarak 4 ilan döndürüyordu —
+ * yani varsayılan değer. Next.js .env'i kendi yüklediği için uygulama
+ * tarafı doğru çalışıyor, yalnızca betıkler etkileniyordu.
+ */
+const envNumber = (name: string, fallback: number) => {
+  const raw = process.env[name];
+  const parsed = raw === undefined ? Number.NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const fetchTimeoutMs = () => envNumber("CRAWLER_FETCH_TIMEOUT_MS", 9000);
+const fetchHardTimeoutMs = () => envNumber("CRAWLER_FETCH_HARD_TIMEOUT_MS", fetchTimeoutMs() * 2 + 8000);
+const maxSearchUrlsPerPlatform = () => envNumber("CRAWLER_MAX_SEARCH_URLS_PER_PLATFORM", 2);
+const maxDetailsPerPlatform = () => envNumber("CRAWLER_MAX_DETAILS_PER_PLATFORM", 4);
+const maxConcurrentPlatforms = () => envNumber("CRAWLER_MAX_CONCURRENT_PLATFORMS", 6);
+const maxConcurrentDetails = () => envNumber("CRAWLER_MAX_CONCURRENT_DETAILS", 3);
+const platformRequestIntervalMs = () => envNumber("CRAWLER_PLATFORM_REQUEST_INTERVAL_MS", 2000);
+const crawlerDeadlineMs = () => envNumber("CRAWLER_DEADLINE_MS", 90000);
 
 const platformRequestQueues = new Map<JobPlatform, { lastRequestAt: number; queue: Promise<void> }>();
 
@@ -166,13 +183,13 @@ function getActiveAdapters(): JobAdapter[] {
 
 export async function crawlJobs(profile: CandidateProfile): Promise<CrawlJobsResult> {
   const queries = buildCrawlQueries(profile);
-  const deadlineAt = Date.now() + CRAWLER_DEADLINE_MS;
+  const deadlineAt = Date.now() + crawlerDeadlineMs();
   const adapterResults = await runLimited(
     getActiveAdapters().map((adapter) => () => {
       console.log(`[Crawler] Starting platform: ${adapter.platform}...`);
       return crawlAdapter(adapter, queries, profile, deadlineAt);
     }),
-    Math.max(1, MAX_CONCURRENT_PLATFORMS)
+    Math.max(1, maxConcurrentPlatforms())
   );
 
   const listings = uniqListings(adapterResults.flatMap((result) => result.listings));
@@ -272,7 +289,7 @@ async function crawlAdapter(
 
     const searchUrls = uniq(queries.flatMap((query) => adapter.buildSearchUrls(query, profile))).slice(
       0,
-      MAX_SEARCH_URLS_PER_PLATFORM
+      maxSearchUrlsPerPlatform()
     );
     const discoveredByUrl = new Map<string, string>();
     let hitDeadline = false;
@@ -342,7 +359,7 @@ async function crawlAdapter(
     // NO URL pre-filtering! Fetch all discovered detail pages and score by content.
     // This fixes the issue where relevant jobs were killed by isPotentiallyRelevantUrl()
     const detailEntries = Array.from(discoveredByUrl.entries())
-      .slice(0, MAX_DETAILS_PER_PLATFORM);
+      .slice(0, maxDetailsPerPlatform());
 
     const parsedListings = await runLimited(
       detailEntries.map(([url, sourceQuery]) => async () => {
@@ -365,7 +382,7 @@ async function crawlAdapter(
 
         return parseJobDetail(detail.html, url, adapter, sourceQuery);
       }),
-      MAX_CONCURRENT_DETAILS
+      maxConcurrentDetails()
     );
     const parsed = parsedListings.filter((listing): listing is CrawledJobListing => Boolean(listing));
 
@@ -443,7 +460,7 @@ async function fetchPlatformHtml(
     assertWithinDeadline(deadlineAt);
 
     const elapsed = Date.now() - state.lastRequestAt;
-    const waitMs = state.lastRequestAt ? Math.max(0, PLATFORM_REQUEST_INTERVAL_MS - elapsed) : 0;
+    const waitMs = state.lastRequestAt ? Math.max(0, platformRequestIntervalMs() - elapsed) : 0;
 
     if (waitMs > 0) {
       const remainingMs = deadlineAt - Date.now();
@@ -458,7 +475,7 @@ async function fetchPlatformHtml(
 
     assertWithinDeadline(deadlineAt);
     state.lastRequestAt = Date.now();
-    return withTimeout(fetchHtml(url, options), FETCH_HARD_TIMEOUT_MS, `Crawler isteği zaman aşımına uğradı: ${url}`);
+    return withTimeout(fetchHtml(url, options), fetchHardTimeoutMs(), `Crawler isteği zaman aşımına uğradı: ${url}`);
   });
 
   state.queue = request.then(() => undefined, () => undefined);
@@ -482,7 +499,7 @@ async function fetchHtml(url: string, options: { forceBrowser?: boolean } = {}):
     const available = await checkBrowserAvailability();
 
     if (available) {
-      const html = await fetchWithBrowser(url, FETCH_TIMEOUT_MS + 5000);
+      const html = await fetchWithBrowser(url, fetchTimeoutMs() + 5000);
 
       if (html && html.length > 500) {
         // Tarayıcı yolu son URL'yi bildirmiyor; yönlendirme denetimi için
@@ -499,7 +516,7 @@ async function fetchHtml(url: string, options: { forceBrowser?: boolean } = {}):
 
 async function fetchHtmlRegular(url: string) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), fetchTimeoutMs());
 
   try {
     const response = await fetch(url, {
@@ -592,7 +609,7 @@ function discoverListingUrls(html: string, searchUrl: string, adapter: JobAdapte
           return false;
         }
       })
-  ).slice(0, MAX_DETAILS_PER_PLATFORM * 2);
+  ).slice(0, maxDetailsPerPlatform() * 2);
 }
 
 
@@ -669,7 +686,7 @@ export function titleMatchesUrl(title: string, url: string): boolean {
   return slugWords.some((word) => titleWords.has(word));
 }
 
-function parseJobDetail(html: string, url: string, adapter: JobAdapter, sourceQuery: string): CrawledJobListing | null {
+export function parseJobDetail(html: string, url: string, adapter: JobAdapter, sourceQuery: string): CrawledJobListing | null {
   const jsonLdListing = parseJsonLdListing(html, url, adapter, sourceQuery);
 
   if (jsonLdListing) {
@@ -805,7 +822,7 @@ function extractJsonLdLocation(job: Record<string, unknown>) {
   return readString((location as Record<string, unknown>).name);
 }
 
-function extractDescription($: cheerio.CheerioAPI, pageText: string, platformSelectors?: string[]) {
+export function extractDescription($: cheerio.CheerioAPI, pageText: string, platformSelectors?: string[]) {
   // Try platform-specific selectors first
   if (platformSelectors?.length) {
     const platformDesc = firstText($, platformSelectors);
@@ -877,7 +894,7 @@ function extractSectionSentences(text: string, marker: RegExp) {
     .slice(0, 8);
 }
 
-function isUsableDetail(title: string | undefined, description: string, url: string) {
+export function isUsableDetail(title: string | undefined, description: string, url: string) {
   if (!title || title.length < 3 || title.length > 180) {
     return false;
   }

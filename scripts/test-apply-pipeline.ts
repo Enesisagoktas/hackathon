@@ -1,3 +1,4 @@
+import "../lib/load-env";
 import path from "path";
 import { stat } from "fs/promises";
 
