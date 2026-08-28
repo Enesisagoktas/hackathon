@@ -2,8 +2,14 @@ import { Check } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-/** Uygulamanın dört adımlı ana akışı; tüm sayfalar aynı diziyi kullanır. */
-export const FLOW_STEPS = ["Giriş", "CV yükle", "Pozisyon seç", "Başvurular"];
+/**
+ * Uygulamanın beş adımlı ana akışı; tüm sayfalar aynı diziyi kullanır.
+ *
+ * İlanlar ve başvurular ayrı adımlardır: ikisi aynı sayfada durduğunda
+ * "şu an ne yapmam gerekiyor?" sorusu bulanıklaşıyordu — önce eşleşen
+ * ilanları gözüyor, sonra başvuruları yönetiyorsun.
+ */
+export const FLOW_STEPS = ["Giriş", "CV yükle", "Pozisyon seç", "İlanlar", "Başvurular"];
 
 export type StepBarProps = {
   /** 1 tabanlı geçerli adım. */

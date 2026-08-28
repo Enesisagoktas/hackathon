@@ -2,13 +2,12 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
-import type { JobSearchResult, JobSearchSummary } from "@/lib/job-search";
 import { AccountConsent, type RegisteredUser } from "@/components/AccountConsent";
 import { ApplicationsPanel } from "@/components/ApplicationsPanel";
 import { AutoApplyToggle } from "@/components/AutoApplyToggle";
-import { JobLinks } from "@/components/JobLinks";
 import { FLOW_STEPS, StepBar } from "@/components/StepBar";
 import { Button } from "@/components/ui/button";
 
@@ -22,19 +21,20 @@ type ApplySummary = {
 };
 
 /**
- * Adım 4: Başvurular ve eşleşen ilanlar.
+ * Adım 5: Başvurular.
  *
- * Arama sonuçları ?arama=<id> parametresinden okunur; parametre yoksa son
- * tamamlanan arama localStorage'dan bulunur. Başvuru listesi aramadan
- * bağımsızdır (kullanıcının tüm başvuruları).
+ * NEDEN YALNIZCA BAŞVURULAR: Eskiden bu sayfa hem eşleşen ilanları hem
+ * başvuruları gösteriyordu; ekranda iki ayrı liste, iki ayrı "Detay"
+ * düğmesi ve iki ayrı amaç yan yana geliyordu. İlanlar artık /ilanlar
+ * sayfasında; burada tek iş var: hazırlanan başvuruları yönetmek.
+ *
+ * Başvuru listesi aramadan bağımsızdır (kullanıcının tüm başvuruları);
+ * ?arama=<id> yalnızca bu turun özetini göstermek için okunur.
  */
 function ApplicationsPageInner() {
   const searchParams = useSearchParams();
   const [user, setUser] = useState<RegisteredUser | null>(null);
-  const [results, setResults] = useState<JobSearchResult[]>([]);
-  const [summary, setSummary] = useState<JobSearchSummary | null>(null);
   const [applySummary, setApplySummary] = useState<ApplySummary | null>(null);
-  const [searchCompleted, setSearchCompleted] = useState(false);
 
   const paramId = searchParams?.get("arama");
 
@@ -53,10 +53,7 @@ function ApplicationsPageInner() {
       const data = await response.json();
 
       if (data.status === "completed") {
-        setResults((data.results ?? []).filter((result: JobSearchResult) => result.kind === "job"));
-        setSummary(data.summary ?? null);
         setApplySummary(data.applySummary ?? null);
-        setSearchCompleted(true);
       }
     } catch {
       // Arama okunamazsa yalnızca başvuru listesi gösterilir.
@@ -82,19 +79,26 @@ function ApplicationsPageInner() {
         </header>
 
         <div className="space-y-4">
-          <StepBar current={4} steps={FLOW_STEPS} />
+          <StepBar current={5} steps={FLOW_STEPS} />
 
           <AccountConsent onUserChange={setUser} />
 
           {user ? (
             <>
+              <div>
+                <Link href={paramId ? `/ilanlar?arama=${paramId}` : "/ilanlar"}>
+                  <Button size="sm" type="button" variant="ghost">
+                    <ArrowLeft className="mr-1.5 h-4 w-4" />
+                    Eşleşen ilanlara dön
+                  </Button>
+                </Link>
+              </div>
+
               <AutoApplyToggle userFullName={user.fullName} />
 
               {applySummary ? <ApplySummaryLine summary={applySummary} /> : null}
 
               <ApplicationsPanel />
-
-              <JobLinks results={results} summary={summary} searchCompleted={searchCompleted} />
             </>
           ) : null}
         </div>

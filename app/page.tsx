@@ -10,7 +10,7 @@ import { UploadCard } from "@/components/UploadCard";
  * Adım 1-2: Giriş ve CV yükleme.
  *
  * Akış sayfalara bölündü: yükleme kuyruğa girince kullanıcı /analiz/[id]
- * sayfasına geçer (skor + pozisyon seçimi), oradan /basvurular sayfasına.
+ * sayfasına geçer (skor + pozisyon seçimi), oradan /ilanlar ve /basvurular sayfalarına.
  */
 export default function Home() {
   const [user, setUser] = useState<RegisteredUser | null>(null);

@@ -45,7 +45,7 @@ const NOTE_LIMIT = 600;
  *
  * Worker CV'yi analiz edip durunca burada AI'nın en güçlü gördüğü 5 pozisyon
  * listelenir; kullanıcı pozisyonlarını, aradığı seviyeyi ve kısa bir arama
- * notunu seçip aramayı başlatır. Arama bitince /basvurular sayfasına geçilir.
+ * notunu seçip aramayı başlatır. Arama bitince /ilanlar sayfasına geçilir.
  */
 export default function AnalysisPage() {
   const params = useParams<{ id: string }>();
@@ -91,15 +91,16 @@ export default function AnalysisPage() {
 
       if (data.status === "completed") {
         stopPolling();
-        // Başvurular sayfası bu aramanın sonuçlarını gösterecek. localStorage
-        // bazı tarayıcılarda (gizli mod / site verisi engelli) hata fırlatır;
-        // yönlendirme buna takılıp iptal olmamalı — arama id'si zaten URL'de.
+        // İlanlar sayfası bu aramanın sonuçlarını gösterecek; başvurular bir
+        // sonraki adımda. localStorage bazı tarayıcılarda (gizli mod / site
+        // verisi engelli) hata fırlatır; yönlendirme buna takılıp iptal
+        // olmamalı — arama id'si zaten URL'de.
         try {
           window.localStorage.setItem("cvmatch:lastSearchId", String(searchId));
         } catch {
           // Depolama yoksa sorun değil.
         }
-        router.replace(`/basvurular?arama=${searchId}`);
+        router.replace(`/ilanlar?arama=${searchId}`);
       } else if (data.status === "failed") {
         stopPolling();
       }
