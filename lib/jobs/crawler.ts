@@ -921,8 +921,34 @@ function cleanupTitle(value: string | undefined) {
     .trim();
 }
 
-function cleanupCompany(value: string | undefined) {
+/**
+ * Şirket olamayacak site arayüz metinleri.
+ *
+ * Ölçüm: Eleman.net'te şirket seçicisi sitenin "İş İlanı Ver" menü düğmesini
+ * yakalıyor ve 17 FARKLI ilan aynı sahte şirket adıyla kaydediliyordu;
+ * birleştirme de bunları tek ilan sanıp 16 gerçek ilanı gizliyordu.
+ * Toptalent'te aynı sorun "İşveren Girişi" ile yaşandı.
+ */
+const COMPANY_CHROME_TEXT = new Set([
+  "is ilani ver",
+  "is ilanlari",
+  "isveren girisi",
+  "firma adi gizli",
+  "firma girisi",
+  "giris yap",
+  "uye ol",
+  "ucretsiz is ilani ver",
+  "hemen basvur",
+  "basvur"
+]);
+
+export function cleanupCompany(value: string | undefined) {
   const text = cleanText(value);
+
+  if (COMPANY_CHROME_TEXT.has(normalizeComparable(text))) {
+    return undefined;
+  }
+
   return text.length > 2 && text.length < 160 ? text : undefined;
 }
 

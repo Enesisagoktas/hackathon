@@ -27,6 +27,7 @@
     "test:dedupe": "tsx scripts/test-dedupe.ts",
     "test:health": "tsx scripts/test-source-health.ts",
     "health:sources": "tsx scripts/source-health.ts",
+    "quality": "tsx scripts/quality-report.ts",
     "audit:eligibility": "tsx scripts/audit-eligibility.ts",
     "cleanup:listings": "tsx scripts/cleanup-listings.ts",
     "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search && npm run test:requirements && npm run test:eligibility && npm run test:progress && npm run test:title && npm run test:dedupe && npm run test:health"

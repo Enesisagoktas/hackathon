@@ -88,7 +88,43 @@ async function main() {
   console.log(`\n${listingResult.affectedRows} ilan kapatıldı, ${appResult.affectedRows} bekleyen başvuru iptal edildi.\n`);
 }
 
+/**
+ * Şirket alanına düşmüş site arayüz metinlerini temizler.
+ *
+ * Ölçüm: Eleman.net'te 17 ilan "İş İlanı Ver" (menü düğmesi), Toptalent'te
+ * kayıtlar "İşveren Girişi" şirket adıyla kaydedilmişti. Crawler artık
+ * bunları yakalıyor; buradaki adım eski kayıtları onarır. İlanlar GERÇEK,
+ * yalnızca şirket alanı bozuk — bu yüzden kapatılmaz, alan boşaltılır.
+ */
+async function clearBogusCompanies(): Promise<void> {
+  const pool = getDbPool();
+  const bogus = ["İş İlanı Ver", "İş İlanları", "İşveren Girişi", "Firma Adı Gizli", "Firma Girişi", "Giriş Yap", "Üye Ol", "Ücretsiz İş İlanı Ver"];
+  const placeholders = bogus.map(() => "?").join(", ");
+
+  if (DRY_RUN) {
+    const [rows] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT company, COUNT(*) n FROM job_listings WHERE company IN (${placeholders}) GROUP BY company`,
+      bogus
+    );
+    if (rows.length) {
+      console.log("Sahte şirket adları (PROVA — temizlenecek):");
+      rows.forEach((row) => console.log(`  ${row.n} × "${row.company}"`));
+    }
+    return;
+  }
+
+  const [result] = await pool.query<mysql.ResultSetHeader>(
+    `UPDATE job_listings SET company = NULL, updated_at = NOW() WHERE company IN (${placeholders})`,
+    bogus
+  );
+
+  if (result.affectedRows) {
+    console.log(`${result.affectedRows} kayıtta sahte şirket adı temizlendi.`);
+  }
+}
+
 main()
+  .then(() => clearBogusCompanies())
   .catch((error) => {
     console.error("Temizlik başarısız:", error);
     process.exitCode = 1;

@@ -35,15 +35,29 @@ check(
 check("Farklı şirketler karışmaz", normalizeCompany("Nexum A.Ş.") !== normalizeCompany("Merit A.Ş."));
 
 console.log("\n2) Pozisyon adı normalizasyonu");
-check("Kıdem eki atılır", normalizeTitle("Kıdemli Yazılım Mühendisi") === normalizeTitle("Yazılım Mühendisi"));
-check("Senior eki atılır", normalizeTitle("Senior Backend Developer") === normalizeTitle("Backend Developer"));
-check("Çalışma türü eki atılır", normalizeTitle("Frontend Developer (Remote)") === normalizeTitle("Frontend Developer"));
+check(
+  "KIDEM AYIRT EDİCİDİR — senior ve düz ilan birleşmez",
+  normalizeTitle("Senior Backend Developer") !== normalizeTitle("Backend Developer"),
+  "aynı şirketin senior ve junior ilanı farklı işlerdir"
+);
+check(
+  "ÇALIŞMA TÜRÜ AYIRT EDİCİDİR — part time ve full time birleşmez",
+  normalizeTitle("Part Time Satış Danışmanı") !== normalizeTitle("Satış Danışmanı Full Time"),
+  "ölçümde ikisi tek ilana birleşiyordu"
+);
+check("Remote süslemesi atılır", normalizeTitle("Frontend Developer (Remote)") === normalizeTitle("Frontend Developer"));
 check("Farklı pozisyonlar karışmaz", normalizeTitle("Backend Developer") !== normalizeTitle("Frontend Developer"));
 
-console.log("\n3) Parmak izi");
-const fp1 = fingerprint({ title: "Senior Backend Developer", company: "Nexum A.Ş." });
-const fp2 = fingerprint({ title: "Backend Developer", company: "Nexum" });
-check("Aynı iş aynı parmak izi", fp1 === fp2, fp1);
+console.log("\n3) Parmak izi (şirket + pozisyon + şehir)");
+const fp1 = fingerprint({ title: "Backend Developer", company: "Nexum A.Ş.", location: "İstanbul(Avr.) (Şişli)" });
+const fp2 = fingerprint({ title: "Backend Developer", company: "Nexum", location: "İstanbul Anadolu" });
+check("Aynı iş aynı parmak izi (şirket eki ve şehir biçimi farklı olsa da)", fp1 === fp2, fp1);
+check(
+  "AYNI UNVAN FARKLI ŞEHİR birleşmez",
+  fingerprint({ title: "Hemşire", company: "Medical Park", location: "Ankara" }) !==
+    fingerprint({ title: "Hemşire", company: "Medical Park", location: "İzmir" }),
+  "zincir firmalar aynı unvanı her şehirde ayrı yayınlar"
+);
 check("Eksik veri parmak izi üretmez", fingerprint({ title: "Developer" }) === "");
 
 console.log("\n4) Metin benzerliği");
@@ -54,7 +68,7 @@ check("Boş metin sıfır döner", textSimilarity("", a) === 0);
 
 console.log("\n5) Gruplama");
 const listings = [
-  { url: "https://a.com/1", title: "Senior Backend Developer", company: "Nexum A.Ş.", location: "İstanbul", description: "x".repeat(50) },
+  { url: "https://a.com/1", title: "Backend Developer", company: "Nexum A.Ş.", location: "İstanbul", description: "x".repeat(50) },
   { url: "https://b.com/9", title: "Backend Developer", company: "Nexum", location: "İstanbul", description: "y".repeat(50) },
   { url: "https://c.com/3", title: "Frontend Developer", company: "Nexum", location: "İstanbul", description: "z".repeat(50) }
 ];
@@ -102,6 +116,42 @@ const noMeta = dedupeListings([
   { url: "https://a.com/2", title: "", company: "" }
 ]);
 check("Kimlik bilgisi yoksa birleştirilmez", noMeta.unique.length === 2, "yanlış birleştirme yapılmaz");
+
+console.log("\n11) Kalite raporunun bulduğu gerçek hatalar (veritabanından)");
+
+// D&R: 12 farklı şehirdeki mağaza ilanı aynı şablon açıklamayı kullanıyor.
+const drTemplate =
+  "D&R mağazalarımızda görev alacak, müşteri ilişkilerinde başarılı, perakende deneyimi olan, esnek çalışma saatlerine uyum sağlayabilecek satış temsilcisi arkadaşlar arıyoruz. Kariyer fırsatları ve sosyal haklar sunulmaktadır. Başvurular gizli tutulacaktır.";
+const drListings = [
+  { url: "https://secretcv.com/d-r/satis-temsilcisi-ankara-1", title: "Satış Temsilcisi - Ankara Nokta", company: "D&R", location: "Ankara", description: drTemplate },
+  { url: "https://secretcv.com/d-r/satis-temsilcisi-izmir-2", title: "Satış Temsilcisi - İzmir Point Bornova", company: "D&R", location: "İzmir", description: drTemplate },
+  { url: "https://secretcv.com/d-r/satis-temsilcisi-kocaeli-3", title: "Satış Temsilcisi - Kocaeli 41 Burda", company: "D&R", location: "Kocaeli", description: drTemplate }
+];
+const drOutcome = dedupeListings(drListings);
+check(
+  "Aynı şablon açıklama + FARKLI şehir birleşmez",
+  drOutcome.unique.length === 3 && drOutcome.removed === 0,
+  `${drOutcome.unique.length} ilan korundu (D&R senaryosu)`
+);
+
+// Aynı şirket, aynı şehir, part time / full time ayrımı.
+const shiftListings = [
+  { url: "https://secretcv.com/x/pt-1", title: "Part Time Satış Danışmanı", company: "Barrels and Oil", location: "İstanbul", description: drTemplate },
+  { url: "https://secretcv.com/x/ft-2", title: "Satış Danışmanı - Full Time", company: "Barrels and Oil", location: "İstanbul", description: drTemplate.replace("satış temsilcisi", "satış danışmanı") }
+];
+const shiftOutcome = dedupeListings(shiftListings);
+check(
+  "Part time ve full time ilanları ayrı kalır (aynı şablon açıklamayla bile)",
+  shiftOutcome.unique.length === 2 && shiftOutcome.removed === 0,
+  `${shiftOutcome.unique.length} ilan korundu`
+);
+
+// Gerçek kopya hâlâ yakalanmalı: aynı şirket, aynı unvan, aynı şehir, iki platform.
+const genuine = dedupeListings([
+  { url: "https://kariyer.net/is-ilani/batigoz-hemsire-1", title: "Hemşire", company: "Batıgöz Sağlık Grubu", location: "İzmir", description: drTemplate },
+  { url: "https://secretcv.com/batigoz/hemsire-2", title: "Hemşire", company: "Batıgöz Sağlık Grubu", location: "İzmir", description: "farklı kısa metin" }
+]);
+check("Gerçek platformlar-arası kopya hâlâ birleşir", genuine.removed === 1, "Batıgöz senaryosu");
 
 console.log(`\n═══ Sonuç: ${passed} geçti, ${failed} kaldı ═══\n`);
 if (failed > 0) process.exitCode = 1;

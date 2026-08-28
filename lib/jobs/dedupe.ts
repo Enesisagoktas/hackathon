@@ -37,6 +37,24 @@ const COMPANY_SUFFIXES = [
   "gmbh"
 ];
 
+/**
+ * Şirket olamayacak site arayüz metinleri.
+ *
+ * Crawler bunları artık kaydetmiyor ama veritabanında eski kayıtlar var;
+ * karşılaştırma tarafı da tanımalı ki "İş İlanı Ver şirketi" diye 17 farklı
+ * ilan aynı gruba düşmesin (ölçümde birebir yaşandı).
+ */
+const BOGUS_COMPANY_NAMES = new Set([
+  "is ilani ver",
+  "is ilanlari",
+  "isveren girisi",
+  "firma adi gizli",
+  "firma girisi",
+  "giris yap",
+  "uye ol",
+  "ucretsiz is ilani ver"
+]);
+
 export function normalizeCompany(value: string | undefined): string {
   // normalizeComparable noktayı korur (sürüm numaraları, "Next.js" gibi
   // beceriler için gerekli). Şirket adında ise nokta kısaltma ayracıdır:
@@ -47,7 +65,7 @@ export function normalizeCompany(value: string | undefined): string {
     .replace(/\s+/g, " ")
     .trim();
 
-  if (!text) {
+  if (!text || BOGUS_COMPANY_NAMES.has(text)) {
     return "";
   }
 
@@ -66,9 +84,16 @@ export function normalizeCompany(value: string | undefined): string {
   return text.trim();
 }
 
-/** Pozisyon adından kıdem/çalışma-türü eklerini ayıklar. */
-const TITLE_NOISE =
-  /\b(kidemli|senior|junior|jr|sr|stajyer|intern|uzman|uzmani|full\s*time|part\s*time|tam\s*zamanli|yari\s*zamanli|remote|uzaktan|hibrit|m\/f\/d|m f d)\b/g;
+/**
+ * Pozisyon adından YALNIZCA süsleme niteliğindeki ekleri ayıklar.
+ *
+ * Kıdem (senior/junior/stajyer) ve çalışma türü (part/full time) BİLİNÇLİ
+ * OLARAK KORUNUR: aynı mağazanın "Part Time Satış Danışmanı" ve "Satış
+ * Danışmanı - Full Time" ilanları FARKLI işlerdir. Ölçümde bu ekler
+ * atıldığı için ikisi tek ilana birleşiyor ve gerçek bir ilan kullanıcıdan
+ * gizleniyordu. Yanlış birleştirme, ayrı göstermekten daha zararlıdır.
+ */
+const TITLE_NOISE = /\b(remote|uzaktan|hibrit|m\/f\/d|m f d)\b/g;
 
 export function normalizeTitle(value: string | undefined): string {
   return normalizeComparable(value ?? "")
@@ -77,8 +102,60 @@ export function normalizeTitle(value: string | undefined): string {
     .trim();
 }
 
-/** İlanın kimlik parmak izi: şirket + pozisyon. */
-export function fingerprint(listing: { title?: string; company?: string }): string {
+/**
+ * Konumun şehir çekirdeği: "İstanbul(Asya) (Ümraniye)" → "istanbul".
+ *
+ * Platformlar şehri farklı biçimlerde yazar; karşılaştırma yalnızca ilk
+ * anlamlı kelime üzerinden yapılır.
+ */
+export function cityToken(location: string | undefined): string {
+  const normalized = normalizeComparable(location ?? "");
+  return normalized.split(" ")[0] ?? "";
+}
+
+/**
+ * Başlıktaki çalışma türü işareti: part time / full time / staj.
+ *
+ * Açıklama-benzerliği yolu için gerekli: aynı mağazanın part time ve full
+ * time ilanı çoğu zaman aynı şablon açıklamayı kullanır; başlıktaki tür
+ * işareti çelişiyorsa bunlar FARKLI işlerdir ve birleştirilmemelidir.
+ */
+export function employmentMarker(title: string | undefined): "part" | "full" | "staj" | null {
+  const text = normalizeComparable(title ?? "");
+
+  if (/staj|intern/.test(text)) return "staj";
+  if (/part\s*time|yari\s*zamanli/.test(text)) return "part";
+  if (/full\s*time|tam\s*zamanli/.test(text)) return "full";
+  return null;
+}
+
+/**
+ * İki konum aynı işi gösteriyor olabilir mi?
+ *
+ * Biri boşsa karar verilemez ve uyumlu sayılır (platformlardan biri konum
+ * yazmamış olabilir). İkisi de doluysa şehir çekirdekleri eşleşmelidir:
+ * aynı zincirin Ankara ve İzmir ilanları FARKLI işlerdir.
+ */
+export function locationsCompatible(left: string | undefined, right: string | undefined): boolean {
+  const a = cityToken(left);
+  const b = cityToken(right);
+
+  if (!a || !b) {
+    return true;
+  }
+
+  return a === b;
+}
+
+/**
+ * İlanın kimlik parmak izi: şirket + pozisyon + şehir.
+ *
+ * Şehir parmak izine dahildir; çünkü zincir firmalar aynı unvanlı ilanı her
+ * şehir için ayrı yayınlar (ölçüm: Medical Park'ın iki farklı "Hemşire"
+ * ilanı birleşiyordu). Konumu yazılmamış ilan boş şehirle ayrı kalır —
+ * emin olunamayan durumda birleştirmemek tercih edilir.
+ */
+export function fingerprint(listing: { title?: string; company?: string; location?: string }): string {
   const company = normalizeCompany(listing.company);
   const title = normalizeTitle(listing.title);
 
@@ -86,7 +163,7 @@ export function fingerprint(listing: { title?: string; company?: string }): stri
     return "";
   }
 
-  return `${company}|${title}`;
+  return `${company}|${title}|${cityToken(listing.location)}`;
 }
 
 /**
@@ -172,7 +249,27 @@ export function groupDuplicates<T extends DedupableListing>(
       for (let i = 0; i < groups.length; i += 1) {
         const candidate = groups[i].primary;
 
-        if (company && normalizeCompany(candidate.company) !== company) {
+        // Açıklama benzerliği yalnızca GÜVENİLİR bir şirket eşleşmesi
+        // üzerine kurulabilir. Şirket adı boş ya da sahte ise (site menü
+        // yazısı) bu yol tamamen kapatılır: platform şablon metinleri
+        // birbirine benzer ve farklı işler yanlışlıkla birleşir.
+        if (!company || normalizeCompany(candidate.company) !== company) {
+          continue;
+        }
+
+        // Aynı şablon açıklama, farklı şehir = farklı iş. Ölçüm: D&R'nin 12
+        // farklı şehirdeki mağaza ilanı aynı açıklamayı kullandığı için tek
+        // ilana birleşiyordu.
+        if (!locationsCompatible(listing.location, candidate.location)) {
+          continue;
+        }
+
+        // Başlıklardaki çalışma türü çelişiyorsa (part ↔ full ↔ staj) aynı
+        // açıklama bile olsa farklı işlerdir.
+        const leftMarker = employmentMarker(listing.title);
+        const rightMarker = employmentMarker(candidate.title);
+
+        if (leftMarker && rightMarker && leftMarker !== rightMarker) {
           continue;
         }
 
