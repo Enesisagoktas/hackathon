@@ -4,6 +4,7 @@ import mysql from "mysql2/promise";
 
 import { getDbPool } from "@/lib/db";
 import { parseJsonField } from "@/lib/job-queue";
+import { dedupeLocationSegments } from "@/lib/jobs/normalize";
 import { normalizeWorkMode, type WorkMode } from "@/lib/search-preferences";
 import type {
   CandidateProfile,
@@ -387,7 +388,8 @@ function mapListingRow(row: mysql.RowDataPacket): JobListingRecord {
     externalId: row.external_id ? String(row.external_id) : undefined,
     title: String(row.title ?? ""),
     company: row.company ? String(row.company) : undefined,
-    location: row.location ? String(row.location) : undefined,
+    // Okuma anında temizlenir: cache'e tekrarlı yazılmış eski kayıtlar da düzelir.
+    location: row.location ? dedupeLocationSegments(String(row.location)) : undefined,
     workMode: workModeRaw && workModeRaw !== "any" ? (workModeRaw as WorkMode) : undefined,
     description: String(row.description ?? ""),
     requirements: parseJsonField<string[]>(row.requirements, []),

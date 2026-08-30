@@ -6,6 +6,7 @@ import {
   BAND_LABELS,
   buildCandidateEligibility,
   evaluateEligibility,
+  scoreBand,
   type CandidateEligibility,
   type EligibilityResult
 } from "@/lib/jobs/eligibility";
@@ -196,8 +197,17 @@ export function combineWithEligibility(
     Math.max(0, Math.min(100, eligibility.roleScore + blendedTechnical + freshness.adjust))
   );
 
+  // Bant, KULLANICIYA GÖSTERİLEN nihai skordan türetilmek zorunda. Eskiden
+  // karışım öncesi deterministik toplamın bandı taşınıyordu ve kart "%70 —
+  // Sınırda" ile "%66 — Uygun"u yan yana gösterebiliyordu (gerçek CV
+  // testinde yakalandı).
   return {
-    eligibility: { ...eligibility, technicalScore: Math.round(blendedTechnical * 10) / 10, totalScore: finalScore },
+    eligibility: {
+      ...eligibility,
+      technicalScore: Math.round(blendedTechnical * 10) / 10,
+      totalScore: finalScore,
+      band: scoreBand(finalScore)
+    },
     finalScore
   };
 }

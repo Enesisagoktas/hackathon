@@ -10,8 +10,11 @@ import { createHash } from "crypto";
  *
  * GÜVENLİK SINIRLARI (bilerek parmak izine dahil):
  *   - userId + cvId: sonuçlardaki uygunluk kararları ve skorlar CV'ye göre
- *     kişiselleştirilmiştir; başka kullanıcıya veya güncellenmiş CV'ye asla
- *     taşınamaz. CV değişince cvId değişir → önbellek kendiliğinden düşer.
+ *     kişiselleştirilmiştir; başka kullanıcıya asla taşınamaz.
+ *   - cvText hash'i: ana CV kaydı UPSERT edilir (cvId sabit kalır) — kullanıcı
+ *     FARKLI bir CV yüklese bile id değişmez. İçerik hash'i olmadan eski
+ *     CV'nin skorları yeni CV'ye taşınırdı; hash içerik değişince önbelleği
+ *     kendiliğinden düşürür.
  *   - searchNote: not, sorgu üretimini ve önceliklendirmeyi etkiler; farklı
  *     not = farklı arama.
  */
@@ -19,6 +22,8 @@ import { createHash } from "crypto";
 export type SearchFingerprintInput = {
   userId?: number | null;
   cvId?: number | null;
+  /** Ham CV metni; içine hash olarak girer (CV değişimi = önbellek düşer). */
+  cvText?: string | null;
   selectedPositions: string[];
   seniorityFilter?: string | null;
   locationMode: string;
@@ -46,9 +51,14 @@ function normalizeList(values: string[]): string[] {
 }
 
 export function computeSearchFingerprint(input: SearchFingerprintInput): string {
+  const cvTextHash = input.cvText?.trim()
+    ? createHash("sha256").update(input.cvText.trim(), "utf8").digest("hex").slice(0, 16)
+    : "-";
+
   const parts = [
     `u:${input.userId ?? "-"}`,
     `cv:${input.cvId ?? "-"}`,
+    `ct:${cvTextHash}`,
     `p:${normalizeList(input.selectedPositions).join(",")}`,
     `s:${normalizeTerm(input.seniorityFilter ?? "any") || "any"}`,
     `l:${normalizeTerm(input.locationMode)}`,

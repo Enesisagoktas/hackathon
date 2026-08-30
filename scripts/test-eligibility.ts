@@ -8,7 +8,8 @@ import {
   type CandidateEligibility
 } from "../lib/jobs/eligibility";
 import { extractRoleRequirements } from "../lib/jobs/requirement-parser";
-import type { CandidateProfile } from "../lib/jobs/types";
+import { combineWithEligibility } from "../lib/jobs/score";
+import type { CandidateProfile, CrawledJobListing } from "../lib/jobs/types";
 
 /**
  * Sistemin engellemesi istenen temel hata:
@@ -230,6 +231,30 @@ check(
   "Her bileşende açıklama var",
   [...internResult.roleComponents, ...internResult.technicalComponents].every((c) => c.detail.length > 5)
 );
+
+// ── 11. AI karışımı sonrası bant, GÖSTERİLEN skordan türer ────────────────
+// Gerçek CV testinde yakalanan hata: kart "%70 — Sınırda" ile "%66 — Uygun"u
+// yan yana gösteriyordu, çünkü bant karışım ÖNCESİ deterministik toplamdan
+// taşınıyor, skor ise AI+tazelik karışımı sonrası basılıyordu.
+console.log("\n11) Karışım sonrası bant-skor tutarlılığı");
+const bandCandidate = buildCandidateEligibility(studentProfile);
+const bandListing: CrawledJobListing = {
+  platform: "test",
+  category: "general",
+  title: "Java Backend Developer (Stajyer)",
+  description: "Java, Spring Boot ve SQL bilen stajyer arıyoruz. Öğrenciler başvurabilir.",
+  url: "https://example.com/ilan/bant-testi",
+  sourceQuery: "backend stajyer"
+};
+
+for (const ai of [15, 50, 95]) {
+  const { eligibility, finalScore } = combineWithEligibility(bandListing, bandCandidate, ai, []);
+  check(
+    `AI=${ai}: bant nihai skordan türetiliyor (${finalScore} → ${BAND_LABELS[eligibility.band]})`,
+    eligibility.band === scoreBand(finalScore)
+  );
+  check(`AI=${ai}: totalScore = gösterilen skor`, eligibility.totalScore === finalScore);
+}
 
 console.log(`\n═══ Sonuç: ${passed} geçti, ${failed} kaldı ═══\n`);
 if (failed > 0) process.exitCode = 1;

@@ -246,6 +246,7 @@ async function processClaimedJob(job: JobSearchQueueRow) {
   const fingerprint = computeSearchFingerprint({
     userId: job.user_id != null ? Number(job.user_id) : null,
     cvId: job.cv_id != null ? Number(job.cv_id) : null,
+    cvText: text,
     selectedPositions,
     seniorityFilter,
     locationMode,

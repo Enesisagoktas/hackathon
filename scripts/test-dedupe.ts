@@ -7,6 +7,7 @@ import {
   richestListing,
   textSimilarity
 } from "../lib/jobs/dedupe";
+import { dedupeLocationSegments } from "../lib/jobs/normalize";
 
 let passed = 0, failed = 0;
 function check(label: string, cond: boolean, detail?: string) {
@@ -152,6 +153,21 @@ const genuine = dedupeListings([
   { url: "https://secretcv.com/batigoz/hemsire-2", title: "Hemşire", company: "Batıgöz Sağlık Grubu", location: "İzmir", description: "farklı kısa metin" }
 ]);
 check("Gerçek platformlar-arası kopya hâlâ birleşir", genuine.removed === 1, "Batıgöz senaryosu");
+
+// Konum metnindeki tekrarlı parçalar (Secretcv çoklu lokasyon ilanlarında
+// gerçek CV testinde görüldü: "İstanbul Anadolu, İstanbul Avrupa" iki kez).
+console.log("\n8) Konum metni tekrar temizliği");
+check(
+  "Tekrarlı parçalar atılır",
+  dedupeLocationSegments("İstanbul Anadolu, İstanbul Avrupa, İstanbul Anadolu, İstanbul Avrupa, TR") ===
+    "İstanbul Anadolu, İstanbul Avrupa, TR"
+);
+check("Tekrarsız konum aynen kalır", dedupeLocationSegments("Ankara, Çankaya") === "Ankara, Çankaya");
+check(
+  "Büyük/küçük harf farkı tekrar sayılır, ilk yazım korunur",
+  dedupeLocationSegments("İzmir, İZMİR, Bornova") === "İzmir, Bornova"
+);
+check("Tek parçalı konum dokunulmaz", dedupeLocationSegments("İstanbul") === "İstanbul");
 
 console.log(`\n═══ Sonuç: ${passed} geçti, ${failed} kaldı ═══\n`);
 if (failed > 0) process.exitCode = 1;

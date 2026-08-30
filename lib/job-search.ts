@@ -207,6 +207,7 @@ export async function searchJobListings(
   input: SearchJobsInput,
   options: SearchJobListingsOptions = {}
 ): Promise<JobSearchResponse> {
+  const searchStartedAt = Date.now();
   const profile = buildCandidateProfile(input, "Genel aday profili");
   const baseSummary: JobSearchSummary = {
     targetRole: profile.targetRole,
@@ -234,9 +235,11 @@ export async function searchJobListings(
     // 1. Tur: cache'teki adaylar AI ile skorlanır.
     await stage("primary-search", "running", "Veritabanı cache'i taranıyor");
     const candidates = await searchCachedListings(profile);
+    const scoringStartedAt = Date.now();
     const firstRound = candidates.length
       ? await scoreListingsWithAi(candidates, profile)
       : { results: [] as JobSearchResult[], evaluatedUrls: new Set<string>() };
+    const firstRoundMs = Date.now() - scoringStartedAt;
 
     let results = sortResults(firstRound.results);
     let liveCrawlNote = "";
@@ -267,16 +270,67 @@ export async function searchJobListings(
       const pending = refreshed.filter((candidate) => !firstRound.evaluatedUrls.has(candidate.url));
       totalCandidates = candidates.length + pending.filter((candidate) => !candidates.some((c) => c.url === candidate.url)).length;
 
-      if (pending.length) {
-        await stage("boutique-search", "running", `${pending.length} yeni ilan değerlendiriliyor`);
-        const secondRound = await scoreListingsWithAi(pending, profile);
-        results = sortResults(mergeResultsByUrl(results, secondRound.results));
-        await stage("boutique-search", "done", `${secondRound.results.length} uygun ilan eklendi`, {
-          found: totalCandidates,
-          eligible: results.length
-        });
-      } else {
+      // ── Zaman bütçesi ────────────────────────────────────────────────────
+      // Gemini istekleri süreç genelinde TEK kuyruktan geçer (waitForGeminiSlot)
+      // — "paralel" batch'ler fiilen sıralıdır ve skorlama süresi ilan sayısıyla
+      // doğrusal büyür. Soğuk cache'te canlı tarama 100+ yeni ilan getirince
+      // (tarama ~210sn + iki skorlama turu) toplam, worker'ın arama zaman
+      // aşımını yapısal olarak aşıyor ve TÜM arama 'failed' oluyordu (öğretmen
+      // senaryosu böyle düştü). Çözüm: 2. tura kalan süreye SIĞACAK kadar ilan
+      // verilir; kalanı cache'te durur ve bir SONRAKİ aramada değerlendirilir.
+      // Yarım sonuç, sıfır sonuçtan iyidir — eksik kapsam not olarak söylenir.
+      const searchBudgetMs = Number(process.env.JOB_SEARCH_TIMEOUT_MS ?? 360000);
+      // Dedupe + sıralama + doğrulama + kayıt için pay bırakılır.
+      const budgetSafetyMs = Number(process.env.SEARCH_BUDGET_SAFETY_MS ?? 45000);
+      const remainingMs = searchBudgetMs - (Date.now() - searchStartedAt) - budgetSafetyMs;
+
+      // İlan başına maliyet 1. turun GERÇEK ölçümünden türetilir (kota/backoff
+      // durumunu da yansıtır); ölçüm yoksa muhafazakâr varsayılan kullanılır.
+      const firstRoundScored = Math.min(candidates.length, Number(process.env.AI_MAX_SCORED ?? 60));
+      const perListingMs =
+        firstRoundScored > 0 ? Math.min(6000, Math.max(400, firstRoundMs / firstRoundScored)) : 1500;
+      const affordableCount = Math.max(0, Math.floor(remainingMs / perListingMs));
+
+      if (!pending.length) {
         await stage("boutique-search", "skipped", "Yeni ilan bulunamadı");
+      } else if (affordableCount === 0) {
+        console.warn(
+          `[search] Süre bütçesi doldu: ${pending.length} yeni ilan bu turda skorlanamadı (cache'te; sonraki aramada değerlendirilir).`
+        );
+        await stage(
+          "boutique-search",
+          "skipped",
+          `${pending.length} yeni ilan süre sınırı nedeniyle sonraki aramaya kaldı`
+        );
+      } else {
+        // En umut verici adaylar önce: bütçe yetmezse kırpılanlar en zayıflar olur.
+        const toScore =
+          pending.length > affordableCount
+            ? pending
+                .slice()
+                .sort((left, right) => (right.cheapScore ?? 0) - (left.cheapScore ?? 0))
+                .slice(0, affordableCount)
+            : pending;
+        const deferredCount = pending.length - toScore.length;
+
+        if (deferredCount > 0) {
+          console.warn(
+            `[search] Süre bütçesi: ${pending.length} yeni ilandan ${toScore.length} tanesi skorlanacak, ${deferredCount} tanesi sonraki aramaya kaldı (~${Math.round(perListingMs)}ms/ilan).`
+          );
+        }
+
+        await stage("boutique-search", "running", `${toScore.length} yeni ilan değerlendiriliyor`);
+        const secondRound = await scoreListingsWithAi(toScore, profile);
+        results = sortResults(mergeResultsByUrl(results, secondRound.results));
+        await stage(
+          "boutique-search",
+          "done",
+          `${secondRound.results.length} uygun ilan eklendi${deferredCount ? ` (${deferredCount} yeni ilan süre sınırından sonraki aramaya kaldı)` : ""}`,
+          {
+            found: totalCandidates,
+            eligible: results.length
+          }
+        );
       }
     } else {
       await stage("alternative-search", "skipped", "Cache yeterli ilan verdi");

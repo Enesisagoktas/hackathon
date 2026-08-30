@@ -20,6 +20,7 @@ function check(label: string, condition: boolean, detail?: string) {
 const base = {
   userId: 7,
   cvId: 12,
+  cvText: "Ali Veli — Frontend Developer. React, TypeScript, 4 yıl deneyim.",
   selectedPositions: ["Frontend Developer", "React Developer"],
   seniorityFilter: "any",
   locationMode: "all-turkey",
@@ -64,6 +65,11 @@ function main() {
     computeSearchFingerprint({ ...base, searchNote: "   " }) === computeSearchFingerprint({ ...base, searchNote: null })
   );
 
+  check(
+    "CV metninin baş/son boşluğu önemsiz",
+    computeSearchFingerprint({ ...base, cvText: `  ${base.cvText}  ` }) === fp
+  );
+
   // Her kriter değişimi farklı parmak izi üretmeli.
   const variants: Array<[string, string]> = [
     ["farklı pozisyon", computeSearchFingerprint({ ...base, selectedPositions: ["Backend Developer"] })],
@@ -72,7 +78,10 @@ function main() {
     ["farklı çalışma şekli", computeSearchFingerprint({ ...base, workMode: "remote" })],
     ["farklı not", computeSearchFingerprint({ ...base, searchNote: "Uzaktan öncelikli" })],
     ["farklı kullanıcı", computeSearchFingerprint({ ...base, userId: 8 })],
-    ["farklı CV", computeSearchFingerprint({ ...base, cvId: 13 })]
+    ["farklı CV kaydı", computeSearchFingerprint({ ...base, cvId: 13 })],
+    // Ana CV upsert edildiği için cvId sabit kalabilir; içerik değişimi tek
+    // başına önbelleği düşürmek ZORUNDA (eski CV'nin skorları taşınmasın).
+    ["aynı cvId, farklı CV metni", computeSearchFingerprint({ ...base, cvText: "Ali Veli — artık Backend Developer. Node.js, 5 yıl." })]
   ];
 
   for (const [label, variant] of variants) {

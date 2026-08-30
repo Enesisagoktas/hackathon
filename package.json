@@ -30,6 +30,7 @@
     "test:freshness": "tsx scripts/test-freshness.ts",
     "test:golden": "tsx scripts/test-golden.ts",
     "test:fingerprint": "tsx scripts/test-fingerprint.ts",
+    "test:fingerprint:live": "tsx scripts/test-fingerprint-live.ts",
     "test:health": "tsx scripts/test-source-health.ts",
     "test:registry": "tsx scripts/test-source-registry.ts",
     "health:sources": "tsx scripts/source-health.ts",
