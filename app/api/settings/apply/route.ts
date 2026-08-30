@@ -41,6 +41,7 @@ export async function PUT(request: Request) {
     const settings = await saveApplicationSettings(user.id, {
       autoApplyEnabled: toBoolean(body.autoApplyEnabled),
       autoApplyMinScore: toNumber(body.autoApplyMinScore),
+      minMatchScore: toNumber(body.minMatchScore),
       dailySendLimit: toNumber(body.dailySendLimit),
       minPrepareScore: toNumber(body.minPrepareScore),
       senderName: toStringOrUndefined(body.senderName),

@@ -58,6 +58,7 @@ function profile(locations: string[], workMode: CandidateProfile["workMode"] = "
 const smtpSettings = (host: string, email: string): ApplicationSettings => ({
   userId: 1,
   autoApplyEnabled: true,
+  minMatchScore: 0,
   autoApplyMinScore: 80,
   dailySendLimit: 10,
   minPrepareScore: 40,

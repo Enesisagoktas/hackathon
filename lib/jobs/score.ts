@@ -10,6 +10,7 @@ import {
   type EligibilityResult
 } from "@/lib/jobs/eligibility";
 import { extractRoleRequirements } from "@/lib/jobs/requirement-parser";
+import { computeFreshness } from "@/lib/jobs/freshness";
 
 const BATCH_SIZE = 4;
 // Scoring is bounded and runs in parallel so a slow/unavailable Gemini never
@@ -78,6 +79,8 @@ export async function scoreListingsWithAi(
   const evaluatedUrls = new Set<string>();
   /** Hard filter'a takılan ilanlar — kullanıcıya "kaç ilan neden elendi" denir. */
   const rejected: Array<{ listing: CrawledJobListing; blockers: { code: string; label: string; detail: string }[] }> = [];
+  /** Feature #3 — elenenlerin sonuç nesneleri (gerekçeli, kullanıcıya gösterilebilir). */
+  const rejectedResults: JobSearchResult[] = [];
 
   batches.forEach((batch, batchIndex) => {
     const outcome = settled[batchIndex];
@@ -103,11 +106,13 @@ export async function scoreListingsWithAi(
       if (aiScore.score >= MIN_RELEVANT_SCORE) {
         const result = buildScoredResult(listing, aiScore, `${batchIndex}-${j}`, candidateEligibility);
 
-        // §11 — Zorunlu şart ihlali varsa ilan skor ne olursa olsun elenir.
-        // Örnek: öğrenci aday + "üniversite mezunu, en az 2 yıl deneyim" ilanı,
-        // teknik uyum %95 olsa bile listeye girmez.
+        // §11 + Feature #3 — Zorunlu şart ihlali ilanı UYGUN listesinden çıkarır
+        // ama artık ÇÖPE ATMAZ: elenenler gerekçeleriyle (blockers) ayrı tutulur,
+        // kullanıcı "neden uygun değil?" sorusunun cevabını görebilir. Gerekçeler
+        // eligibility motorunun deterministik blocker'larıdır — AI uydurmaz.
         if (result.eligibility && !result.eligibility.eligible) {
           rejected.push({ listing, blockers: result.eligibility.blockers });
+          rejectedResults.push(result);
           return;
         }
 
@@ -125,10 +130,14 @@ export async function scoreListingsWithAi(
     return { results: buildUnscoredResults(topCandidates), evaluatedUrls };
   }
 
-  const results = scored
-    .sort((left, right) => right.matchScore - left.matchScore)
-    .slice(0, MAX_RESULTS)
-    .map((result, index) => ({ ...result, id: `${result.id}:${index + 1}` }));
+  // Uygunlar önce; ELENENLER listenin sonuna sınırlı sayıda eklenir (ana
+  // sonuçları domine etmesinler — şartname kuralı). Sıralama katmanı zaten
+  // eligible=false olanları en alta koyar; arayüz varsayılan olarak gizler.
+  const MAX_REJECTED_SHOWN = 15;
+  const results = [
+    ...scored.sort((left, right) => right.matchScore - left.matchScore).slice(0, MAX_RESULTS),
+    ...rejectedResults.sort((left, right) => right.matchScore - left.matchScore).slice(0, MAX_REJECTED_SHOWN)
+  ].map((result, index) => ({ ...result, id: `${result.id}:${index + 1}` }));
 
   if (rejected.length) {
     const reasons = new Map<string, number>();
@@ -178,7 +187,14 @@ export function combineWithEligibility(
   });
 
   const blendedTechnical = (eligibility.technicalScore + (aiScore / 100) * 40) / 2;
-  const finalScore = Math.round(Math.min(100, eligibility.roleScore + blendedTechnical));
+
+  // Feature #2 — tazelik küçük bir düzeltme olarak PUANA işlenir (±3);
+  // ayrı sıralama ekseni değildir. Böylece gösterilen sayı ile sıra aynı
+  // kalır ve uyumluluğu asla domine edemez.
+  const freshness = computeFreshness(listing.postedAt);
+  const finalScore = Math.round(
+    Math.max(0, Math.min(100, eligibility.roleScore + blendedTechnical + freshness.adjust))
+  );
 
   return {
     eligibility: { ...eligibility, technicalScore: Math.round(blendedTechnical * 10) / 10, totalScore: finalScore },
@@ -226,6 +242,7 @@ function buildScoredResult(
     matchReasons: aiScore.reasons.slice(0, 5),
     confidence: aiScore.score >= 75 ? "high" : aiScore.score >= 50 ? "medium" : "low",
     eligibility: combined ? toEligibilitySummary(combined.eligibility) : undefined,
+    freshness: computeFreshness(listing.postedAt).label ?? undefined,
     actionLabel: "İlanı Aç",
     postedAt: listing.postedAt,
     matchedKeywords: aiScore.matchedKeywords.slice(0, 10),

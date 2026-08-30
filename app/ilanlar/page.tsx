@@ -9,6 +9,7 @@ import type { JobSearchResult, JobSearchSummary } from "@/lib/job-search";
 import { AccountConsent, type RegisteredUser } from "@/components/AccountConsent";
 import { JobFilters, applyJobFilters, DEFAULT_FILTERS, type JobFilterState } from "@/components/JobFilters";
 import { JobLinks } from "@/components/JobLinks";
+import { SkillHeatmapCard } from "@/components/SkillHeatmapCard";
 import { FLOW_STEPS, StepBar } from "@/components/StepBar";
 import { Button } from "@/components/ui/button";
 
@@ -27,6 +28,34 @@ function JobsPageInner() {
   const [summary, setSummary] = useState<JobSearchSummary | null>(null);
   const [searchCompleted, setSearchCompleted] = useState(false);
   const [filters, setFilters] = useState<JobFilterState>(DEFAULT_FILTERS);
+
+  // Feature #4 — eşik tercihi kalıcıdır: mevcut settings mekanizmasından
+  // okunur, değişince oraya yazılır. Ayar okunamazsa varsayılan (Tümü)
+  // kalır — mevcut davranış değişmez.
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    fetch("/api/settings/apply")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        const stored = Number(data?.settings?.minMatchScore ?? 0);
+        if (stored > 0) {
+          setFilters((current) => ({ ...current, minScore: stored }));
+        }
+      })
+      .catch(() => undefined);
+  }, [user]);
+
+  const persistMinScore = (next: JobFilterState) => {
+    setFilters(next);
+    fetch("/api/settings/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ minMatchScore: next.minScore })
+    }).catch(() => undefined);
+  };
 
   const paramId = searchParams?.get("arama");
 
@@ -87,10 +116,14 @@ function JobsPageInner() {
                 <JobFilters
                   results={results}
                   filters={filters}
-                  onChange={setFilters}
+                  onChange={(next) =>
+                    next.minScore !== filters.minScore ? persistMinScore(next) : setFilters(next)
+                  }
                   visibleCount={visible.length}
                 />
               ) : null}
+
+              {searchCompleted ? <SkillHeatmapCard role={summary?.targetRole} /> : null}
 
               <JobLinks results={visible} summary={summary} searchCompleted={searchCompleted} />
 

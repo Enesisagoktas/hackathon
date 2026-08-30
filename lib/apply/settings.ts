@@ -10,6 +10,8 @@ export type ApplicationSettings = {
   autoApplyEnabled: boolean;
   autoApplyMinScore: number;
   dailySendLimit: number;
+  /** Feature #4 — kullanıcının sonuç görünüm eşiği (0 = tümü göster). */
+  minMatchScore: number;
   minPrepareScore: number;
   senderName?: string;
   senderEmail?: string;
@@ -34,6 +36,8 @@ const DEFAULTS = {
   autoApplyEnabled: false,
   autoApplyMinScore: 80,
   dailySendLimit: 10,
+  // Varsayılan 0: mevcut davranış AYNEN korunur, eşik ancak kullanıcı seçerse devreye girer.
+  minMatchScore: 0,
   // 40 seçildi çünkü Gemini anahtarı yokken AI skorlama devre dışı kalır ve
   // yedek (anahtar kelime) skorları 55'te tavanlanır. Eşik 55 olsaydı anahtarsız
   // kurulumda hiçbir başvuru paketi üretilmez, sistem sessizce boş dönerdi.
@@ -61,6 +65,7 @@ export async function getApplicationSettings(userId: number): Promise<Applicatio
     userId,
     autoApplyEnabled: Boolean(row.auto_apply_enabled),
     autoApplyMinScore: Number(row.auto_apply_min_score ?? DEFAULTS.autoApplyMinScore),
+    minMatchScore: Number(row.min_match_score ?? DEFAULTS.minMatchScore),
     dailySendLimit: Number(row.daily_send_limit ?? DEFAULTS.dailySendLimit),
     minPrepareScore: Number(row.min_prepare_score ?? DEFAULTS.minPrepareScore),
     senderName: row.sender_name ?? undefined,
@@ -115,13 +120,14 @@ export async function saveApplicationSettings(
   const pool = getDbPool();
   await pool.query(
     `INSERT INTO application_settings
-       (user_id, auto_apply_enabled, auto_apply_min_score, daily_send_limit, min_prepare_score,
+       (user_id, auto_apply_enabled, auto_apply_min_score, min_match_score, daily_send_limit, min_prepare_score,
         sender_name, sender_email, smtp_host, smtp_port, smtp_secure, smtp_user,
         smtp_password_encrypted, cc_self)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        auto_apply_enabled = VALUES(auto_apply_enabled),
        auto_apply_min_score = VALUES(auto_apply_min_score),
+       min_match_score = VALUES(min_match_score),
        daily_send_limit = VALUES(daily_send_limit),
        min_prepare_score = VALUES(min_prepare_score),
        sender_name = VALUES(sender_name),
@@ -138,6 +144,7 @@ export async function saveApplicationSettings(
       userId,
       merged.autoApplyEnabled,
       clamp(merged.autoApplyMinScore, 0, 100),
+      clamp(merged.minMatchScore, 0, 100),
       clamp(merged.dailySendLimit, 0, 100),
       clamp(merged.minPrepareScore, 0, 100),
       merged.senderName ?? null,

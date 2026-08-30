@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EligibilityBadge, EligibilityPanel } from "@/components/EligibilityPanel";
+import { FRESHNESS_LABELS } from "@/lib/jobs/freshness";
 import { cn } from "@/lib/utils";
 
 type JobLinksProps = {
@@ -114,6 +115,19 @@ function JobCard({ result }: { result: JobSearchResult }) {
           <div className="flex flex-wrap items-center gap-2">
             <MatchScoreBadge score={result.matchScore} />
             {result.eligibility ? <EligibilityBadge eligibility={result.eligibility} /> : null}
+            {result.freshness ? (
+              <span
+                className={
+                  result.freshness === "new"
+                    ? "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
+                    : result.freshness === "recent"
+                      ? "rounded-full bg-sky-100 px-2 py-0.5 text-xs text-sky-700"
+                      : "rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500"
+                }
+              >
+                {FRESHNESS_LABELS[result.freshness]}
+              </span>
+            ) : null}
             <span className="text-xs text-slate-500">{result.platform}</span>
             {result.foundInSources && result.foundInSources.length > 1 ? (
               <span

@@ -299,9 +299,14 @@ async function processClaimedJob(job: JobSearchQueueRow) {
     { verified: alive.length },
     closedCount
   );
-  await reportStage(job.id, "rank", "done", `${finalResults.length} uygun ilan hazır`, {
-    eligible: finalResults.length
-  });
+  const eligibleCount = finalResults.filter((result) => result.eligibility?.eligible !== false).length;
+  await reportStage(
+    job.id,
+    "rank",
+    "done",
+    `${eligibleCount} uygun ilan hazır${finalResults.length > eligibleCount ? ` (+${finalResults.length - eligibleCount} gerekçeli elenen)` : ""}`,
+    { eligible: eligibleCount }
+  );
 
   const summary = {
     ...searchPayload.summary,
@@ -315,7 +320,11 @@ async function processClaimedJob(job: JobSearchQueueRow) {
   };
 
   // Eşleşen ilanlar için CV uyarlama + başvuru paketi üretimi.
-  const applySummary = await runApplyStage(job, text, fileType, profileResult, evaluation, finalResults);
+  // Feature #3 güvenlik kapısı: elenen (eligible=false) ilanlar artık sonuç
+  // listesinde taşınıyor ama BAŞVURU PAKETİ ÜRETİLMEZ — kullanıcının
+  // başvuramayacağı ilana CV uyarlamak boşa Gemini çağrısı ve yanlış beklenti.
+  const applicableResults = finalResults.filter((result) => result.eligibility?.eligible !== false);
+  const applySummary = await runApplyStage(job, text, fileType, profileResult, evaluation, applicableResults);
 
   console.log(`[Worker] Job ${job.id} - Completed with ${finalResults.length} results.`);
   // `AND status = 'processing'` koruması: iş bu sırada başkası tarafından

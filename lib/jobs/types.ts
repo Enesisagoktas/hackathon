@@ -133,6 +133,8 @@ export type JobSearchResult = {
    * Birden fazlaysa kart "N kaynakta bulundu" rozeti gösterir.
    */
   foundInSources?: string[];
+  /** Feature #2 — tazelik rozeti (new/recent/old); tarih bilinmiyorsa yok. */
+  freshness?: "new" | "recent" | "old";
 };
 
 /**

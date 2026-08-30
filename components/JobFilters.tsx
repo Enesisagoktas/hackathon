@@ -19,13 +19,19 @@ export type JobFilterState = {
   location: string;
   workMode: string;
   onlyEligible: boolean;
+  /** Feature #4 — kullanıcı eşiği; 0 = tümü. UYGUNLUK SÜZGECİNDEN SONRA uygulanır. */
+  minScore: number;
 };
 
 export const DEFAULT_FILTERS: JobFilterState = {
   sort: "uyum",
   location: "hepsi",
   workMode: "hepsi",
-  onlyEligible: false
+  // Feature #3 — elenen ilanlar VARSAYILAN GİZLİ gelir; kullanıcı kutuyu
+  // açarak gerekçeleriyle görebilir ("elenenleri göster"). Elenenler ana
+  // listeyi domine edemez.
+  onlyEligible: true,
+  minScore: 0
 };
 
 /** Şehir adını "İstanbul(Asya) (Ümraniye)" gibi eklerden arındırır. */
@@ -40,6 +46,12 @@ export function baseCity(value: string | undefined): string {
 export function applyJobFilters(results: JobSearchResult[], filters: JobFilterState): JobSearchResult[] {
   const filtered = results.filter((result) => {
     if (filters.onlyEligible && result.eligibility && !result.eligibility.eligible) {
+      return false;
+    }
+
+    // Feature #4 — eşik, uygunluk süzgecinden SONRA çalışır ve elenen
+    // (gerekçeli) kayıtlara dokunmaz; onları kendi kutusu yönetir.
+    if (filters.minScore > 0 && (result.eligibility?.eligible ?? true) && result.matchScore < filters.minScore) {
       return false;
     }
 
@@ -137,6 +149,7 @@ export function JobFilters({
   }, [results]);
 
   const hasIneligible = results.some((result) => result.eligibility && !result.eligibility.eligible);
+  const ineligibleCount = results.filter((result) => result.eligibility && !result.eligibility.eligible).length;
 
   return (
     <div className="space-y-3 rounded-2xl border bg-white p-3.5 shadow-sm">
@@ -145,6 +158,20 @@ export function JobFilters({
         <span className="text-xs text-slate-500">
           {visibleCount} / {results.length} ilan
         </span>
+      </div>
+
+      <div className="space-y-1.5">
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">En az uyum</span>
+        <Segmented
+          value={String(filters.minScore)}
+          onChange={(value) => onChange({ ...filters, minScore: Number(value) })}
+          options={[
+            { value: "0", label: "Tümü" },
+            { value: "70", label: "%70+" },
+            { value: "80", label: "%80+" },
+            { value: "90", label: "%90+" }
+          ]}
+        />
       </div>
 
       <Segmented
@@ -183,11 +210,11 @@ export function JobFilters({
         <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600">
           <input
             type="checkbox"
-            checked={filters.onlyEligible}
-            onChange={(event) => onChange({ ...filters, onlyEligible: event.target.checked })}
+            checked={!filters.onlyEligible}
+            onChange={(event) => onChange({ ...filters, onlyEligible: !event.target.checked })}
             className="h-4 w-4 rounded border-slate-300 text-teal-600"
           />
-          Yalnızca başvurabileceğim ilanlar
+          Elenen ilanları da göster ({ineligibleCount}) — neden uygun olmadıklarıyla
         </label>
       ) : null}
     </div>

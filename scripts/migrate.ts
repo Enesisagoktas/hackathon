@@ -44,6 +44,9 @@ async function run() {
     console.log("[migrate] Ensuring job_searches columns...");
     await ensureJobQueueSchema();
 
+    console.log("[migrate] Ensuring application_settings columns...");
+    await ensureColumn(pool, "application_settings", "min_match_score", "INT UNSIGNED NOT NULL DEFAULT 0");
+
     console.log("[migrate] Ensuring job_listings columns...");
     await ensureJobListingsColumns(pool);
 
@@ -159,3 +162,18 @@ async function ensureFulltextIndex(pool: mysql.Pool, table: string, indexName: s
 }
 
 run();
+
+
+/** Tek kolon ekleme (varsa dokunmaz) — geri uyumlu, veri kaybı yok. */
+async function ensureColumn(
+  pool: mysql.Pool,
+  table: string,
+  column: string,
+  definition: string
+): Promise<void> {
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(`SHOW COLUMNS FROM ${table} LIKE ?`, [column]);
+  if (!rows.length) {
+    await pool.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    console.log(`[migrate]   + ${table}.${column}`);
+  }
+}

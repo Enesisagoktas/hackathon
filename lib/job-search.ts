@@ -7,6 +7,7 @@ import {
   type WorkMode
 } from "@/lib/search-preferences";
 import { dedupeListings } from "@/lib/jobs/dedupe";
+import { expandProfessionTerms } from "@/lib/jobs/profession-dictionary";
 import { searchCachedListings } from "@/lib/jobs/search-cache";
 import { scoreListingsWithAi } from "@/lib/jobs/score";
 import type {
@@ -515,12 +516,32 @@ function buildCandidateProfile(input: SearchJobsInput, fallbackTargetRole: strin
   // hedef rol ve arama sorguları bu seçime hizalanır.
   const selectedPositions = cleanTerms(input.selectedPositions ?? []).slice(0, 5);
   const aiTitles = cleanTerms(ai?.targetPositions ?? []);
-  const allTitles = unique([...selectedPositions, ...titles, ...aiTitles]).slice(0, 8);
+
+  // Feature #1 — Meslek sözlüğü genişletmesi. EŞdeğer adlar (equivalent)
+  // unvan/sorgu katmanına girer; komşu meslekler (related) YALNIZCA anahtar
+  // kelime katmanına iner — sınıf ayrımı alakasız sonuç patlamasını önler.
+  const expansion = expandProfessionTerms([...selectedPositions, ...titles, ...aiTitles]);
+
+  if (expansion.canonicals.length) {
+    console.log(
+      `[search] Meslek sözlüğü: ${expansion.canonicals.join(", ")} → +${expansion.equivalents.length} eşdeğer, +${expansion.related.length} komşu`
+    );
+  }
+
+  const allTitles = unique([
+    ...selectedPositions,
+    ...titles,
+    ...aiTitles,
+    ...cleanTerms(expansion.equivalents)
+  ]).slice(0, 12);
   const targetRole =
     selectedPositions[0] ?? allTitles[0] ?? inferTitleForSearch([...skills, ...searchKeywords]) ?? fallbackTargetRole;
 
   // Merge AI query variations with standard keywords
-  const aiQueryVariations = cleanTerms(ai?.queryVariations ?? []);
+  const aiQueryVariations = unique([
+    ...cleanTerms(ai?.queryVariations ?? []),
+    ...cleanTerms(expansion.equivalents).slice(0, 6)
+  ]);
   // Kullanıcının notundaki anlamlı kelimeler cache aramasında ve ucuz
   // ön-skorda da sinyal olur (AI skorlaması notun tamamını ayrıca görür).
   //
@@ -540,7 +561,10 @@ function buildCandidateProfile(input: SearchJobsInput, fallbackTargetRole: strin
     ...industries,
     ...experienceAreas,
     ...languages,
-    ...aiQueryVariations
+    ...aiQueryVariations,
+    // Komşu meslekler yalnız burada: cache aramasında sinyal verirler ama
+    // sorgu üretip alakasız taramaya yol açmazlar.
+    ...cleanTerms(expansion.related).slice(0, 8)
   ]).slice(0, 60);
 
   return {
