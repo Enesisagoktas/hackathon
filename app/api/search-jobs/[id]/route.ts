@@ -181,8 +181,23 @@ async function filterStoredResults(results: unknown): Promise<unknown> {
     return results;
   }
 
-  const items = results as Array<{ title?: string; url?: string; listingId?: number }>;
-  const kept = items.filter((item) => !looksLikeNonJobPage(String(item.title ?? ""), String(item.url ?? "")));
+  const items = results as Array<{
+    title?: string;
+    url?: string;
+    listingId?: number;
+    matchScore?: number;
+    eligibility?: { eligible?: boolean };
+  }>;
+  const kept = items
+    .filter((item) => !looksLikeNonJobPage(String(item.title ?? ""), String(item.url ?? "")))
+    // Eski kayıtlar pozisyon-alt-skoru kovalayan sırayla donduruldu; kullanıcıya
+    // gösterilen sıra HER ZAMAN gösterilen puana göre olmalı (uygunlar önce).
+    .sort((left, right) => {
+      const le = left.eligibility?.eligible ?? true;
+      const re = right.eligibility?.eligible ?? true;
+      if (le !== re) return le ? -1 : 1;
+      return (right.matchScore ?? 0) - (left.matchScore ?? 0);
+    });
 
   const ids = kept
     .map((item) => item.listingId)

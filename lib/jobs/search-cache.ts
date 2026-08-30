@@ -1,4 +1,5 @@
 import { searchActiveListings } from "@/lib/jobs/repository";
+import { listSources } from "@/lib/jobs/source-registry";
 import { normalizeComparable } from "@/lib/jobs/normalize";
 import type { CandidateProfile, CrawledJobListing, JobListingRecord } from "@/lib/jobs/types";
 
@@ -19,6 +20,29 @@ export type ScoredListing = {
  *  2. Score each with a cheap (non-AI) heuristic.
  *  3. Return the top candidates as CrawledJobListing items ready for AI scoring.
  */
+/**
+ * Yurt dışı kaynakların adları (registry country != TR).
+ *
+ * 60 saniyelik bellek içi önbellek: aday seçimi her aramada çağrılır,
+ * registry sorgusunu her seferinde tekrarlamaya gerek yok.
+ */
+let foreignNamesCache: { at: number; names: Set<string> } | null = null;
+
+async function getForeignSourceNames(): Promise<Set<string>> {
+  if (foreignNamesCache && Date.now() - foreignNamesCache.at < 60_000) {
+    return foreignNamesCache.names;
+  }
+
+  try {
+    const sources = await listSources();
+    const names = new Set(sources.filter((source) => source.country !== "TR").map((source) => source.name));
+    foreignNamesCache = { at: Date.now(), names };
+    return names;
+  } catch {
+    return foreignNamesCache?.names ?? new Set();
+  }
+}
+
 export async function searchCachedListings(profile: CandidateProfile): Promise<CrawledJobListing[]> {
   const records = await searchActiveListings(profile);
 
@@ -29,10 +53,43 @@ export async function searchCachedListings(profile: CandidateProfile): Promise<C
 
   const scored: ScoredListing[] = locationFiltered
     .map((listing) => ({ listing, cheapScore: cheapScore(listing, profile) }))
+    .sort((left, right) => right.cheapScore - left.cheapScore);
+
+  // ÜLKE KOTASI: Türkiye'deki bir aday için aday havuzunu yurt dışı kaynaklar
+  // dolduramaz. Kök neden ölçüldü: İngilizce sorgu İngilizce metinli yabancı
+  // ilanlarda daha güçlü eşleşiyor ve 60 slotun tamamını kapıyordu (arama
+  // #64: 10/10 yabancı). Uzaktan çalışma tercihinde pay genişler; aksi hâlde
+  // yabancı kaynaklara en fazla %20 yer var. TR adayları azsa yabancılar
+  // kalanı doldurabilir — kota tavan, garanti değil.
+  const foreignNames = await getForeignSourceNames();
+  const foreignShare = profile.workMode === "remote" ? 0.4 : 0.2;
+  const maxForeign = Math.max(2, Math.round(MAX_PREFILTER * foreignShare));
+
+  const domestic: ScoredListing[] = [];
+  const foreign: ScoredListing[] = [];
+
+  for (const item of scored) {
+    (foreignNames.has(item.listing.platform) ? foreign : domestic).push(item);
+  }
+
+  // Yabancılara en fazla `maxForeign` koltuk ayrılır; kalan koltuklar TR'nindir.
+  // TR adayları koltuklarını dolduramazsa boş kalan yerleri yabancılar alır —
+  // kota bir tavandır, sonuç sayısını asla düşürmez.
+  const reservedForeign = Math.min(foreign.length, maxForeign);
+  const takeDomestic = domestic.slice(0, MAX_PREFILTER - reservedForeign);
+  const takeForeign = foreign.slice(0, MAX_PREFILTER - takeDomestic.length);
+
+  const balanced = [...takeDomestic, ...takeForeign]
     .sort((left, right) => right.cheapScore - left.cheapScore)
     .slice(0, MAX_PREFILTER);
 
-  return scored.slice(0, MAX_AI_CANDIDATES).map(({ listing, cheapScore: score }) => toCrawledListing(listing, score, profile));
+  if (foreign.length > takeForeign.length) {
+    console.log(
+      `[search-cache] Ülke kotası: aday havuzu TR=${takeDomestic.length}, yabancı=${takeForeign.length} (kesilen yabancı ${foreign.length - takeForeign.length}).`
+    );
+  }
+
+  return balanced.slice(0, MAX_AI_CANDIDATES).map(({ listing, cheapScore: score }) => toCrawledListing(listing, score, profile));
 }
 
 /**

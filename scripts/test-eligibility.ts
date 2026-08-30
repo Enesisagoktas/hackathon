@@ -166,6 +166,51 @@ const seniorFit = evaluateEligibility(seniorJavaListing, seniorCandidate, { list
 check("Kıdemli aday senior ilana uygun", seniorFit.eligible === true, seniorFit.blockers.map((b) => b.label).join(", ") || "blocker yok");
 check("Skoru yüksek", seniorFit.totalScore >= 75, `${seniorFit.totalScore} → ${BAND_LABELS[seniorFit.band]}`);
 
+console.log("\n8b) Yurt dışı ilan kuralı (kullanıcı geri bildirimi)");
+const abroadOffice = extractRoleRequirements({
+  title: "Frontend Engineer - Music",
+  description: "Join our Stockholm office. React, TypeScript.",
+  location: "Stockholm"
+});
+const abroadResult = evaluateEligibility(abroadOffice, seniorCandidate, { listingVerified: true });
+check(
+  "Stockholm ofis ilanı Türkiye'deki adaya ELENİR",
+  !abroadResult.eligible && abroadResult.blockers.some((b) => b.code === "abroad-listing"),
+  abroadResult.blockers.map((b) => b.label).join(", ")
+);
+
+const abroadRemote = extractRoleRequirements({
+  title: "Frontend Engineer",
+  description: "Fully remote role. React, TypeScript. Work from anywhere.",
+  location: "Remote - Europe",
+  workMode: "remote"
+});
+const abroadRemoteResult = evaluateEligibility(abroadRemote, seniorCandidate, { listingVerified: true });
+check(
+  "Uzaktan çalışılan yabancı ilan ELENMEZ",
+  !abroadRemoteResult.blockers.some((b) => b.code === "abroad-listing"),
+  "remote ilanlara Türkiye'den başvurulabilir"
+);
+
+const noLocation = extractRoleRequirements({
+  title: "Frontend Developer",
+  description: "React developer needed."
+});
+const noLocationResult = evaluateEligibility(noLocation, seniorCandidate, { listingVerified: true });
+check(
+  "Konumu yazılmamış ilan yurt dışı diye ELENMEZ",
+  !noLocationResult.blockers.some((b) => b.code === "abroad-listing"),
+  "temkin ilkesi"
+);
+
+const trListing = extractRoleRequirements({
+  title: "Frontend Developer",
+  description: "İstanbul ofisimizde React geliştirici.",
+  location: "İstanbul(Avr.) (Şişli)"
+});
+const trResult = evaluateEligibility(trListing, seniorCandidate, { listingVerified: true });
+check("Türkiye ilanı yurt dışı sayılmaz", !trResult.blockers.some((b) => b.code === "abroad-listing"));
+
 console.log("\n9) Skor bantları (§14)");
 check("90+ çok güçlü", scoreBand(95) === "cok-guclu");
 check("80-89 çok uygun", scoreBand(84) === "cok-uygun");

@@ -468,13 +468,12 @@ function sortResults(results: JobSearchResult[]): JobSearchResult[] {
         return leftEligible ? -1 : 1;
       }
 
-      const leftRole = left.eligibility?.roleScore ?? 0;
-      const rightRole = right.eligibility?.roleScore ?? 0;
-
-      if (Math.abs(leftRole - rightRole) >= 5) {
-        return rightRole - leftRole;
-      }
-
+      // Uygunlar arasında sıralama DÜZ matchScore'dur. Pozisyon alt-skoru
+      // zaten toplam puanın %60'ı olarak matchScore'un içindedir; burada
+      // ikinci bir eksen olarak kullanılınca %69'un altına %55, üstüne %63
+      // gelebiliyor ve kullanıcıya sıralama RASTGELE görünüyordu (canlı
+      // kayıtta birebir görüldü, kullanıcı da bildirdi). Gösterilen sayı
+      // neyse sıralama da o olmalı.
       if (left.matchScore !== right.matchScore) {
         return right.matchScore - left.matchScore;
       }

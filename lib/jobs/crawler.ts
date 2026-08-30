@@ -135,6 +135,16 @@ const JOB_ADAPTERS: JobAdapter[] = [
       (/\/is-ilani\//.test(url.pathname) || /-i\d{5,}/.test(url.pathname))
   },
   {
+    platform: "isbul.net",
+    category: "general",
+    // Canlı yoklama: slug araması güçlü (hemşire → 335 geçiş); ?search= ise
+    // sorguyu yok sayıyor. Detaylar /is-ilani/{slug} (sayısız, uzun slug).
+    buildSearchUrls: (query) => [`https://www.isbul.net/is-ilanlari/${slugify(query)}`],
+    isDetailUrl: (url) =>
+      url.hostname.includes("isbul.net") &&
+      /^\/is-ilani\/[a-z0-9-]{12,}$/.test(url.pathname)
+  },
+  {
     platform: "Indeed TR",
     category: "general",
     buildSearchUrls: (query) => [`https://tr.indeed.com/jobs?q=${encodeURIComponent(query)}&l=T%C3%BCrkiye`],
@@ -243,6 +253,11 @@ async function crawlRegistrySource(
   if (source.accessMethod === "json-api" || source.accessMethod === "rss") {
     try {
       const outcome = await fetchStructuredSource(source, queries);
+      // Yabancı API kaynakları tek çağrıda yüzlerce kayıt döndürebilir ve cache
+      // bileşimini yurt dışına kaydırır; TR dışı kaynaklara tavan uygulanır.
+      if (source.country !== "TR" && outcome.listings.length > 12) {
+        outcome.listings = outcome.listings.slice(0, 12);
+      }
       const { kept, dropped } = filterListingsByProfile(outcome.listings, profile);
       const rateLimited = outcome.status === 429 || outcome.status === 503;
 
@@ -300,9 +315,15 @@ async function crawlRegistrySource(
 
   // ─ HTML kaynağı: özel adaptör varsa o, yoksa genel adaptör ─
   const adapter = dedicated.get(source.name) ?? buildGenericAdapter(source);
+  // Tarama bütçesi ülkeye göre: Türkiye'de arayan aday için TR kaynakları tam
+  // bütçe alır, yabancılar küçük pay — kullanıcı geri bildirimi: "yurt
+  // dışından çok, Türkiye'den az ilan var".
+  const detailBudget =
+    source.country === "TR" ? maxDetailsPerPlatform() : Math.min(10, maxDetailsPerPlatform());
   const result = await crawlAdapter(adapter, queries, profile, deadlineAt, {
     intervalMs: source.rateLimitMs,
-    preferBrowser: source.browserRequired
+    preferBrowser: source.browserRequired,
+    maxDetails: detailBudget
   });
 
   await recordSourceScan(source.name, {
@@ -475,6 +496,8 @@ type AdapterCrawlOptions = {
   intervalMs?: number;
   /** JS gerektiren kaynaklarda arama sayfası doğrudan tarayıcıyla açılır. */
   preferBrowser?: boolean;
+  /** Bu kaynak için açılacak en fazla detay sayfası (bütçe). */
+  maxDetails?: number;
 };
 
 async function crawlAdapter(
@@ -592,7 +615,7 @@ async function crawlAdapter(
     // NO URL pre-filtering! Fetch all discovered detail pages and score by content.
     // This fixes the issue where relevant jobs were killed by isPotentiallyRelevantUrl()
     const detailEntries = Array.from(discoveredByUrl.entries())
-      .slice(0, maxDetailsPerPlatform());
+      .slice(0, crawlOptions.maxDetails ?? maxDetailsPerPlatform());
 
     const parsedListings = await runLimited(
       detailEntries.map(([url, sourceQuery]) => async () => {

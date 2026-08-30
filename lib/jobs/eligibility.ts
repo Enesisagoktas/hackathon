@@ -1,4 +1,5 @@
 import { normalizeComparable } from "@/lib/jobs/normalize";
+import { TURKEY_CITIES } from "@/lib/turkey-cities";
 import type { CandidateProfile } from "@/lib/jobs/types";
 import type {
   EducationLevel,
@@ -35,6 +36,7 @@ export type BlockerCode =
   | "seniority-mismatch"
   | "employment-mismatch"
   | "location-mismatch"
+  | "abroad-listing"
   | "language-missing";
 
 export type HardBlocker = {
@@ -169,6 +171,21 @@ export function buildCandidateEligibility(profile: CandidateProfile): CandidateE
   };
 }
 
+const TURKISH_CITY_TOKENS = new Set(TURKEY_CITIES.map((city) => normalizeComparable(city)));
+
+/** Konum metni Türkiye'yi işaret ediyor mu? (şehir adı ya da "türkiye"/"turkey") */
+export function locationLooksTurkish(location: string): boolean {
+  const normalized = normalizeComparable(location);
+
+  if (/turkiye|turkey/.test(normalized)) {
+    return true;
+  }
+
+  return normalized
+    .split(/[\s,\/()-]+/)
+    .some((token) => token.length >= 3 && TURKISH_CITY_TOKENS.has(token));
+}
+
 // ─── Katman 1: Hard filter ────────────────────────────────────────────────
 
 /**
@@ -241,6 +258,23 @@ export function findHardBlockers(
         code: "location-mismatch",
         label: "Konum",
         detail: `İlan ${role.locations[0]} konumunda; seçtiğin şehirler arasında değil.`
+      });
+    }
+  }
+
+  // 5b. Yurt dışı ilan (kullanıcı geri bildirimi: "yurt dışından çok ilan
+  //     geliyor"). Aday Türkiye'de arıyorsa (uzaktan tercihi yoksa), konumu
+  //     yazılı ama Türkiye'de OLMAYAN ve uzaktan da olmayan ilan başvurulabilir
+  //     değildir — Stockholm ofisine İstanbul'dan gidilmez. Konumu boş veya
+  //     uzaktan olan yabancı ilanlar planlı olarak SERBEST kalır.
+  if (candidate.workMode !== "remote" && role.workMode !== "remote" && role.locations.length) {
+    const inTurkey = role.locations.some((location) => locationLooksTurkish(location));
+
+    if (!inTurkey) {
+      blockers.push({
+        code: "abroad-listing",
+        label: "Yurt dışı ilan",
+        detail: `İlan ${role.locations[0]} konumunda ve uzaktan çalışmaya açık değil.`
       });
     }
   }

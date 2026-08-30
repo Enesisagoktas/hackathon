@@ -65,7 +65,12 @@ export function applyJobFilters(results: JobSearchResult[], filters: JobFilterSt
   } else if (filters.sort === "pozisyon") {
     sorted.sort((left, right) => (right.eligibility?.roleScore ?? 0) - (left.eligibility?.roleScore ?? 0));
   } else {
-    sorted.sort((left, right) => right.matchScore - left.matchScore);
+    sorted.sort((left, right) => {
+      const le = left.eligibility?.eligible ?? true;
+      const re = right.eligibility?.eligible ?? true;
+      if (le !== re) return le ? -1 : 1;
+      return right.matchScore - left.matchScore;
+    });
   }
 
   return sorted;

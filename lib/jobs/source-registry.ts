@@ -168,6 +168,9 @@ export const SEED_SOURCES: SeedSource[] = [
   // durumda genel listeyi döndürüyor. §9 gereği bu "arama" sayılamaz; kaynak
   // güncel-liste modunda taranır ve alaka kapısı süzer.
   { name: "İşin Olsun", sourceType: "general-board", baseUrl: "https://isinolsun.com/is-ilanlari", searchSupported: false, priority: 3, professionTags: "genel" },
+  // Canlı yoklama: /is-ilanlari/{slug} araması güçlü çalışıyor (hemşire
+  // sorgusunda 335 geçiş, detaylar /is-ilani/{slug} biçiminde).
+  { name: "isbul.net", sourceType: "general-board", baseUrl: "https://www.isbul.net", searchUrlTemplate: "https://www.isbul.net/is-ilanlari/{query_slug}", priority: 6, professionTags: "genel" },
   { name: "Indeed TR", sourceType: "aggregator", baseUrl: "https://tr.indeed.com", searchUrlTemplate: "https://tr.indeed.com/jobs?q={query}&l=T%C3%BCrkiye", priority: 4, browserRequired: true, javascriptRequired: true, professionTags: "genel" },
   { name: "LinkedIn", sourceType: "general-board", baseUrl: "https://www.linkedin.com", searchUrlTemplate: "https://www.linkedin.com/jobs/search/?keywords={query}&location=Turkey&f_TPR=r604800", priority: 5, browserRequired: true, professionTags: "genel" },
 
@@ -183,12 +186,12 @@ export const SEED_SOURCES: SeedSource[] = [
   // ── Dalga 3: teknoloji / startup / remote / global ──
   { name: "Coderspace", sourceType: "niche-board", baseUrl: "https://coderspace.io", searchUrlTemplate: "https://coderspace.io/is-ilanlari/?search={query}", priority: 20, javascriptRequired: true, professionTags: "tech" },
   { name: "Kodilan", sourceType: "remote-board", baseUrl: "https://kodilan.com", searchUrlTemplate: "https://kodilan.com/?q={query}", priority: 21, browserRequired: true, javascriptRequired: true, professionTags: "tech" },
-  { name: "RemoteOK", sourceType: "remote-board", baseUrl: "https://remoteok.com", searchUrlTemplate: "https://remoteok.com/api", accessMethod: "json-api", apiAvailable: true, priority: 22, professionTags: "tech", platformType: "remoteok-api" },
-  { name: "WeWorkRemotely", sourceType: "remote-board", baseUrl: "https://weworkremotely.com", searchUrlTemplate: "https://weworkremotely.com/remote-jobs.rss", accessMethod: "rss", priority: 23, professionTags: "tech", platformType: "rss" },
-  { name: "Wellfound", sourceType: "startup-board", baseUrl: "https://wellfound.com", searchUrlTemplate: "https://wellfound.com/role/r/{query_slug}", priority: 24, browserRequired: true, javascriptRequired: true, professionTags: "tech,startup" },
-  { name: "startup.jobs", sourceType: "startup-board", baseUrl: "https://startup.jobs", searchUrlTemplate: "https://startup.jobs/?q={query}", priority: 25, browserRequired: true, professionTags: "tech,startup" },
+  { name: "RemoteOK", country: "GLOBAL", sourceType: "remote-board", baseUrl: "https://remoteok.com", searchUrlTemplate: "https://remoteok.com/api", accessMethod: "json-api", apiAvailable: true, priority: 22, professionTags: "tech", platformType: "remoteok-api" },
+  { name: "WeWorkRemotely", country: "GLOBAL", sourceType: "remote-board", baseUrl: "https://weworkremotely.com", searchUrlTemplate: "https://weworkremotely.com/remote-jobs.rss", accessMethod: "rss", priority: 23, professionTags: "tech", platformType: "rss" },
+  { name: "Wellfound", country: "GLOBAL", sourceType: "startup-board", baseUrl: "https://wellfound.com", searchUrlTemplate: "https://wellfound.com/role/r/{query_slug}", priority: 24, browserRequired: true, javascriptRequired: true, professionTags: "tech,startup" },
+  { name: "startup.jobs", country: "GLOBAL", sourceType: "startup-board", baseUrl: "https://startup.jobs", searchUrlTemplate: "https://startup.jobs/?q={query}", priority: 25, browserRequired: true, professionTags: "tech,startup" },
   { name: "Webrazzi Jobs", sourceType: "startup-board", baseUrl: "https://jobs.webrazzi.com", searchUrlTemplate: "https://jobs.webrazzi.com/?s={query}", priority: 26, professionTags: "tech,startup" },
-  { name: "GitHub remote-jobs", sourceType: "github", baseUrl: "https://github.com/remoteintech/remote-jobs", searchSupported: false, priority: 27, professionTags: "tech" },
+  { name: "GitHub remote-jobs", country: "GLOBAL", sourceType: "github", baseUrl: "https://github.com/remoteintech/remote-jobs", searchSupported: false, priority: 27, professionTags: "tech" },
 
   // ── Dalga 3: sektörel niş kaynaklar ──
   { name: "Sağlık Personeli İlanları", sourceType: "niche-board", baseUrl: "https://www.saglikpersoneli.com.tr", searchUrlTemplate: "https://www.saglikpersoneli.com.tr/arama?q={query}", priority: 30, professionTags: "saglik" },
@@ -227,6 +230,7 @@ export async function seedSourceRegistry(): Promise<number> {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          base_url = VALUES(base_url),
+         country = VALUES(country),
          search_url_template = VALUES(search_url_template),
          access_method = VALUES(access_method),
          search_supported = VALUES(search_supported),
@@ -417,6 +421,14 @@ export function scoreSourceForSelection(
   return { score, reason: reasons.join(", ") || "genel havuz" };
 }
 
+/**
+ * Aday Türkiye'de mi arıyor? (uzaktan tercih yoksa Türkiye varsayılır —
+ * bu bir Türkiye iş arama uygulamasıdır.)
+ */
+export function isTurkeyFocused(profile: CandidateProfile): boolean {
+  return profile.workMode !== "remote";
+}
+
 export async function selectSourcesForRun(
   profile: CandidateProfile,
   options: SelectionOptions = {}
@@ -441,6 +453,13 @@ export async function selectSourcesForRun(
 
   const typeCounts = new Map<SourceType, number>();
   const remaining = Math.max(0, limit - picked.length);
+
+  // Ülke tavanı (§6 + kullanıcı geri bildirimi): Türkiye'de arayan aday için
+  // yabancı kaynak sayısı sınırlıdır — aksi hâlde tarama bütçesi yurt dışı
+  // ilanlara akıyor ve Türkiye ilanları az kalıyordu.
+  const turkeyFocused = isTurkeyFocused(profile);
+  const maxForeignSources = turkeyFocused ? 2 : 5;
+  let foreignCount = 0;
 
   // 1 keşif kontenjanı: en uzun süredir taranmamış (veya hiç taranmamış) kaynak.
   const explorer = [...rest].sort((left, right) => {
@@ -469,6 +488,13 @@ export async function selectSourcesForRun(
     const count = typeCounts.get(source.sourceType) ?? 0;
     if (count >= 3) {
       continue;
+    }
+
+    if (source.country !== "TR") {
+      if (foreignCount >= maxForeignSources) {
+        continue;
+      }
+      foreignCount += 1;
     }
 
     picked.push({ ...source, wave: waveForPriority(source.priority), selectionReason: reason });

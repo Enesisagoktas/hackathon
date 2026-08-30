@@ -405,6 +405,12 @@ function buildFulltextQuery(profile: CandidateProfile): string {
   const terms = [
     profile.targetRole,
     ...profile.titles.slice(0, 4),
+    // TÜRKÇE EŞANLAMLILAR KRİTİK: "Frontend Developer" sorgusu İngilizce
+    // metinli yurt dışı ilanlarda güçlü eşleşirken "Önyüz Geliştirici" gibi
+    // Türkçe kayıtları kaçırıyordu; 60 kişilik aday havuzunu yabancılar
+    // dolduruyor ve kullanıcı "yurt dışından çok, Türkiye'den az" görüyordu
+    // (ölçüm: arama #64'te 10/10 sonuç yabancıydı).
+    ...(profile.queryVariations ?? []).slice(0, 6),
     ...profile.skills.slice(0, 8),
     ...profile.keywords.slice(0, 8)
   ];
@@ -412,7 +418,12 @@ function buildFulltextQuery(profile: CandidateProfile): string {
 }
 
 function buildLikeTerms(profile: CandidateProfile): string[] {
-  const terms = [profile.targetRole, ...profile.titles.slice(0, 3), ...profile.skills.slice(0, 6)];
+  const terms = [
+    profile.targetRole,
+    ...profile.titles.slice(0, 3),
+    ...(profile.queryVariations ?? []).slice(0, 3),
+    ...profile.skills.slice(0, 6)
+  ];
   return dedupeTerms(terms)
     .filter((term) => term.length >= 3)
     .slice(0, 8);
