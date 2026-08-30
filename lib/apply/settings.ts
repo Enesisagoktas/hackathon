@@ -12,6 +12,11 @@ export type ApplicationSettings = {
   dailySendLimit: number;
   /** Feature #4 — kullanıcının sonuç görünüm eşiği (0 = tümü göster). */
   minMatchScore: number;
+  /**
+   * Feature #10 — yeni eşleşme özeti e-postası (kullanıcının KENDİ adresine).
+   * Varsayılan kapalı: e-posta gönderimi her zaman açık rızayla başlar.
+   */
+  matchEmailEnabled: boolean;
   minPrepareScore: number;
   senderName?: string;
   senderEmail?: string;
@@ -38,6 +43,7 @@ const DEFAULTS = {
   dailySendLimit: 10,
   // Varsayılan 0: mevcut davranış AYNEN korunur, eşik ancak kullanıcı seçerse devreye girer.
   minMatchScore: 0,
+  matchEmailEnabled: false,
   // 40 seçildi çünkü Gemini anahtarı yokken AI skorlama devre dışı kalır ve
   // yedek (anahtar kelime) skorları 55'te tavanlanır. Eşik 55 olsaydı anahtarsız
   // kurulumda hiçbir başvuru paketi üretilmez, sistem sessizce boş dönerdi.
@@ -66,6 +72,7 @@ export async function getApplicationSettings(userId: number): Promise<Applicatio
     autoApplyEnabled: Boolean(row.auto_apply_enabled),
     autoApplyMinScore: Number(row.auto_apply_min_score ?? DEFAULTS.autoApplyMinScore),
     minMatchScore: Number(row.min_match_score ?? DEFAULTS.minMatchScore),
+    matchEmailEnabled: Boolean(row.match_email_enabled),
     dailySendLimit: Number(row.daily_send_limit ?? DEFAULTS.dailySendLimit),
     minPrepareScore: Number(row.min_prepare_score ?? DEFAULTS.minPrepareScore),
     senderName: row.sender_name ?? undefined,
@@ -91,9 +98,10 @@ export async function saveApplicationSettings(
     throw new Error("Gönderen e-posta adresi geçersiz.");
   }
 
-  // Otomatik gönderim ancak eksiksiz SMTP yapılandırmasıyla açılabilir.
+  // Otomatik gönderim ve eşleşme e-postası ancak eksiksiz SMTP ile açılabilir:
+  // ikisi de kullanıcının kendi SMTP hesabından gerçek e-posta çıkarır.
   const willHavePassword = update.smtpPassword ? true : current.hasSmtpPassword;
-  if (merged.autoApplyEnabled) {
+  if (merged.autoApplyEnabled || merged.matchEmailEnabled) {
     const missing = [
       !merged.smtpHost && "SMTP sunucusu",
       !merged.smtpPort && "SMTP portu",
@@ -103,7 +111,8 @@ export async function saveApplicationSettings(
     ].filter(Boolean);
 
     if (missing.length) {
-      throw new Error(`Otomatik başvuruyu açmak için şu alanlar gerekli: ${missing.join(", ")}.`);
+      const which = merged.autoApplyEnabled ? "Otomatik başvuruyu" : "Eşleşme e-postasını";
+      throw new Error(`${which} açmak için şu alanlar gerekli: ${missing.join(", ")}.`);
     }
   }
 
@@ -120,14 +129,15 @@ export async function saveApplicationSettings(
   const pool = getDbPool();
   await pool.query(
     `INSERT INTO application_settings
-       (user_id, auto_apply_enabled, auto_apply_min_score, min_match_score, daily_send_limit, min_prepare_score,
+       (user_id, auto_apply_enabled, auto_apply_min_score, min_match_score, match_email_enabled, daily_send_limit, min_prepare_score,
         sender_name, sender_email, smtp_host, smtp_port, smtp_secure, smtp_user,
         smtp_password_encrypted, cc_self)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        auto_apply_enabled = VALUES(auto_apply_enabled),
        auto_apply_min_score = VALUES(auto_apply_min_score),
        min_match_score = VALUES(min_match_score),
+       match_email_enabled = VALUES(match_email_enabled),
        daily_send_limit = VALUES(daily_send_limit),
        min_prepare_score = VALUES(min_prepare_score),
        sender_name = VALUES(sender_name),
@@ -145,6 +155,7 @@ export async function saveApplicationSettings(
       merged.autoApplyEnabled,
       clamp(merged.autoApplyMinScore, 0, 100),
       clamp(merged.minMatchScore, 0, 100),
+      merged.matchEmailEnabled,
       clamp(merged.dailySendLimit, 0, 100),
       clamp(merged.minPrepareScore, 0, 100),
       merged.senderName ?? null,

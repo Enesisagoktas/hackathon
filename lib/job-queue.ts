@@ -152,6 +152,14 @@ async function doEnsureJobQueueSchema() {
     alters.push("ADD COLUMN search_note VARCHAR(600) NULL AFTER seniority_filter");
   }
 
+  // Feature #8 — aynı kriterli aramanın kısa aralıkla tekrarında sonuç
+  // yeniden kullanılabilsin diye deterministik arama parmak izi (sha256 hex).
+  // Kolonla birlikte eklenen indeks, TTL sorgusunun tam taramaya dönmesini önler.
+  if (!existing.has("fingerprint")) {
+    alters.push("ADD COLUMN fingerprint VARCHAR(64) NULL AFTER search_note");
+    alters.push("ADD INDEX idx_job_searches_fingerprint (fingerprint, status, completed_at)");
+  }
+
   // Akış artık iki aşamalı: analiz bitince iş 'awaiting_selection' durumunda
   // durur, kullanıcı pozisyon seçince tekrar kuyruğa girer. Eski enum bu
   // değeri tanımıyorsa genişlet (mevcut satırların değeri korunur).

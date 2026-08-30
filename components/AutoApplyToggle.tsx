@@ -26,7 +26,12 @@ type SettingsState = {
   hasSmtpPassword: boolean;
   senderEmail?: string;
   smtpHost?: string;
+  /** Feature #10 — yeni eşleşme özeti e-postası (kendi adresine). */
+  matchEmailEnabled: boolean;
 };
+
+/** Mini SMTP formunun hangi özelliği açmak için görüntülendiği. */
+type PendingFeature = "auto" | "match";
 
 /** Yaygın sağlayıcıların SMTP değerleri; alan adından otomatik seçilir. */
 const SMTP_BY_DOMAIN: Record<string, { host: string; port: number; secure: boolean }> = {
@@ -47,6 +52,7 @@ const SMTP_BY_DOMAIN: Record<string, { host: string; port: number; secure: boole
 export function AutoApplyToggle({ userFullName }: { userFullName?: string }) {
   const [settings, setSettings] = useState<SettingsState | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [pendingFeature, setPendingFeature] = useState<PendingFeature>("auto");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [customHost, setCustomHost] = useState("");
@@ -89,14 +95,16 @@ export function AutoApplyToggle({ userFullName }: { userFullName?: string }) {
     setSettings(data.settings);
   }
 
-  async function handleToggle(checked: boolean) {
+  async function handleToggle(checked: boolean, feature: PendingFeature = "auto") {
     if (!settings) return;
     setMessage(null);
+
+    const field = feature === "auto" ? "autoApplyEnabled" : "matchEmailEnabled";
 
     // Kapatmak her zaman tek tık.
     if (!checked) {
       try {
-        await putSettings({ autoApplyEnabled: false });
+        await putSettings({ [field]: false });
       } catch (error) {
         setMessage({ tone: "error", text: error instanceof Error ? error.message : "Kapatılamadı." });
       }
@@ -106,13 +114,14 @@ export function AutoApplyToggle({ userFullName }: { userFullName?: string }) {
     // Açarken: SMTP zaten kayıtlıysa tek tık; değilse mini form.
     if (settings.hasSmtpPassword && settings.senderEmail) {
       try {
-        await putSettings({ autoApplyEnabled: true });
+        await putSettings({ [field]: true });
       } catch (error) {
         setMessage({ tone: "error", text: error instanceof Error ? error.message : "Açılamadı." });
       }
       return;
     }
 
+    setPendingFeature(feature);
     setShowForm(true);
   }
 
@@ -135,7 +144,7 @@ export function AutoApplyToggle({ userFullName }: { userFullName?: string }) {
 
     try {
       await putSettings({
-        autoApplyEnabled: true,
+        [pendingFeature === "auto" ? "autoApplyEnabled" : "matchEmailEnabled"]: true,
         senderName: userFullName,
         senderEmail: email.trim(),
         smtpUser: email.trim(),
@@ -146,7 +155,13 @@ export function AutoApplyToggle({ userFullName }: { userFullName?: string }) {
       });
       setShowForm(false);
       setPassword("");
-      setMessage({ tone: "ok", text: "Otomatik başvuru açıldı. 80+ puanlı eşleşmeler senin adına gönderilecek." });
+      setMessage({
+        tone: "ok",
+        text:
+          pendingFeature === "auto"
+            ? "Otomatik başvuru açıldı. 80+ puanlı eşleşmeler senin adına gönderilecek."
+            : "Eşleşme e-postası açıldı. Yeni uygun ilanlar bulundukça özet alacaksın."
+      });
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "Kurulum tamamlanamadı." });
     } finally {
@@ -175,6 +190,22 @@ export function AutoApplyToggle({ userFullName }: { userFullName?: string }) {
           <span className="block text-slate-500">
             {settings.autoApplyMinScore}+ puanlı eşleşmelerde, ilanda başvuru e-postası varsa CV&apos;n ve ön yazın
             senin adına gönderilir (günde en fazla {settings.dailySendLimit}). Diğer her şey onayına düşer.
+          </span>
+        </span>
+      </label>
+
+      <label className="mt-3 flex cursor-pointer items-start gap-3 border-t pt-3">
+        <input
+          checked={settings.matchEmailEnabled}
+          className="mt-1 h-4 w-4 shrink-0 accent-teal-600"
+          type="checkbox"
+          onChange={(event) => void handleToggle(event.target.checked, "match")}
+        />
+        <span className="text-sm leading-6 text-slate-700">
+          <span className="font-medium text-slate-900">Yeni eşleşme e-postası</span>
+          <span className="block text-slate-500">
+            Aramana uyan yeni ilanlar bulundukça kendi adresine kısa bir özet gelir. Başvuru yapılmaz, sadece
+            haber verilir.
           </span>
         </span>
       </label>

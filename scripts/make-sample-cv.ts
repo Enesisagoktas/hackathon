@@ -42,6 +42,135 @@ const CVS: Array<{ file: string; title: string; html: string }> = [
     })
   },
   {
+    file: "ornek-cv-hemsire.pdf",
+    title: "Hemşire",
+    html: cvHtml({
+      name: "Fatma Demir",
+      role: "Hemşire",
+      contact: "fatma.demir@example.com · +90 533 111 22 33 · İstanbul",
+      summary:
+        "4 yıl deneyimli hemşire. Yoğun bakım ve dahiliye servislerinde hasta bakımı, ilaç uygulama ve enfeksiyon kontrolü alanlarında görev aldım. Hasta ve yakını iletişiminde deneyimliyim.",
+      experience: [
+        {
+          title: "Servis Hemşiresi — Özel Anadolu Hastanesi",
+          period: "2023 - günümüz · İstanbul",
+          points: [
+            "Dahiliye servisinde günlük 20+ hastanın bakım ve ilaç takibini yürüttüm.",
+            "Enfeksiyon kontrol komitesinde görev aldım; el hijyeni uyumunu artıran eğitimler verdim."
+          ]
+        },
+        {
+          title: "Yoğun Bakım Hemşiresi — Devlet Hastanesi",
+          period: "2021 - 2023 · Ankara",
+          points: [
+            "3. seviye yoğun bakımda ventilatördeki hastaların bakımını üstlendim.",
+            "Acil müdahale ekibinde CPR sertifikalı üye olarak çalıştım."
+          ]
+        }
+      ],
+      skills: ["Hasta bakımı", "Yoğun bakım", "İlaç uygulama", "Enfeksiyon kontrolü", "CPR", "Hasta kayıt sistemleri", "Vital takibi"],
+      education: "Hemşirelik, Lisans — İstanbul Üniversitesi (2017 - 2021)",
+      languages: "Türkçe (ana dil), İngilizce (orta)"
+    })
+  },
+  {
+    file: "ornek-cv-garson.pdf",
+    title: "Garson",
+    html: cvHtml({
+      name: "Murat Kaya",
+      role: "Garson",
+      contact: "murat.kaya@example.com · +90 534 222 33 44 · İstanbul",
+      summary:
+        "3 yıl deneyimli servis elemanı. Yoğun restoran ve kafe ortamlarında sipariş alma, servis ve kasa/adisyon takibi yaptım. Müşteri memnuniyeti odaklı çalışırım.",
+      experience: [
+        {
+          title: "Garson — Lezzet Durağı Restoran",
+          period: "2024 - günümüz · İstanbul Kadıköy",
+          points: [
+            "Günlük 100+ misafirin sipariş ve servisini yürüttüm.",
+            "Adisyon ve kasa kapanışlarında sorumluluk aldım."
+          ]
+        },
+        {
+          title: "Servis Elemanı — Keyif Kafe",
+          period: "2022 - 2024 · İstanbul",
+          points: [
+            "Kahvaltı ve öğle servisinde masa düzeni ve sipariş akışını yönettim.",
+            "Yeni başlayan iki servis elemanına işe alıştırma eğitimi verdim."
+          ]
+        }
+      ],
+      skills: ["Servis", "Sipariş alma", "Adisyon", "Müşteri ilişkileri", "Kasa", "Takım çalışması", "Hijyen"],
+      education: "Lise — Kadıköy Anadolu Lisesi (2018 - 2022)",
+      languages: "Türkçe (ana dil), İngilizce (temel)"
+    })
+  },
+  {
+    file: "ornek-cv-muhasebe.pdf",
+    title: "Muhasebe Elemanı",
+    html: cvHtml({
+      name: "Zeynep Arslan",
+      role: "Muhasebe Elemanı",
+      contact: "zeynep.arslan@example.com · +90 535 333 44 55 · İstanbul",
+      summary:
+        "5 yıl deneyimli muhasebe elemanı. Genel muhasebe, e-fatura/e-arşiv süreçleri, Logo Tiger kullanımı ve KDV/muhtasar beyannameleri konusunda deneyimliyim.",
+      experience: [
+        {
+          title: "Muhasebe Elemanı — Kardelen Gıda San. Tic. Ltd.",
+          period: "2022 - günümüz · İstanbul",
+          points: [
+            "Aylık 500+ e-fatura kaydını Logo Tiger üzerinden işledim.",
+            "KDV ve muhtasar beyannamelerinin hazırlık süreçlerini yürüttüm.",
+            "Cari hesap mutabakatlarını aylık düzenle tamamladım."
+          ]
+        },
+        {
+          title: "Ön Muhasebe Elemanı — Yıldız Ticaret",
+          period: "2019 - 2022 · İstanbul",
+          points: [
+            "Fatura kesimi, tahsilat takibi ve banka mutabakatlarını yaptım.",
+            "Excel ile haftalık nakit akış raporları hazırladım."
+          ]
+        }
+      ],
+      skills: ["Genel muhasebe", "Logo Tiger", "E-fatura", "Beyanname", "Excel", "Cari hesap", "Mutabakat"],
+      education: "Muhasebe ve Vergi Uygulamaları, Ön Lisans — Anadolu Üniversitesi (2017 - 2019)",
+      languages: "Türkçe (ana dil)"
+    })
+  },
+  {
+    file: "ornek-cv-ogretmen.pdf",
+    title: "İngilizce Öğretmeni",
+    html: cvHtml({
+      name: "Elif Şahin",
+      role: "İngilizce Öğretmeni",
+      contact: "elif.sahin@example.com · +90 536 444 55 66 · İzmir",
+      summary:
+        "Yeni mezun İngilizce öğretmeni. Staj döneminde ortaokul seviyesinde ders planlama ve sınıf yönetimi deneyimi kazandım; özel ders vererek farklı seviyelerde öğrencilerle çalıştım.",
+      experience: [
+        {
+          title: "Stajyer Öğretmen — İzmir Atatürk Ortaokulu",
+          period: "2025 - 2026 · İzmir",
+          points: [
+            "Haftada 12 saat İngilizce dersini gözetim altında planlayıp işledim.",
+            "Ölçme-değerlendirme araçları hazırladım ve veli görüşmelerine katıldım."
+          ]
+        },
+        {
+          title: "Özel Ders Öğretmeni — Serbest",
+          period: "2023 - günümüz · İzmir",
+          points: [
+            "İlkokul ve lise seviyesinde 10+ öğrenciye birebir İngilizce dersi verdim.",
+            "YDS/YDT hazırlık programları oluşturdum."
+          ]
+        }
+      ],
+      skills: ["Ders planlama", "Sınıf yönetimi", "Ölçme değerlendirme", "İngilizce", "İletişim", "Materyal geliştirme"],
+      education: "İngilizce Öğretmenliği, Lisans — Dokuz Eylül Üniversitesi (2022 - 2026)",
+      languages: "Türkçe (ana dil), İngilizce (ileri - C1)"
+    })
+  },
+  {
     file: "ornek-cv-ihracat.pdf",
     title: "İhracat Pazarlama Uzmanı",
     html: cvHtml({

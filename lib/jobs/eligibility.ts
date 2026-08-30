@@ -32,6 +32,7 @@ import type { LocationMode, WorkMode } from "@/lib/search-preferences";
 export type BlockerCode =
   | "listing-invalid"
   | "graduate-required"
+  | "education-level"
   | "experience-below-min"
   | "seniority-mismatch"
   | "employment-mismatch"
@@ -208,6 +209,30 @@ export function findHardBlockers(
       label: "Mezuniyet şartı",
       detail: "İlan yalnızca mezun adayları kabul ediyor; profilin öğrenci olarak görünüyor."
     });
+  }
+
+  // 1b. Eğitim SEVİYESİ — ilanın kabul ettiği en düşük seviyenin altındaysa.
+  //     Altın küme yakaladı: yüksek lisans şartlı ilan, üniversite mezununa
+  //     "uygun" çıkıyordu — seviye yetersizliği yalnızca puan kırıyordu.
+  //     Temkin: adayın seviyesi BİLİNMİYORSA eleme yapılmaz.
+  if (role.education.length > 0 && candidate.educationLevel !== null) {
+    const candidateRank = EDUCATION_ORDER[candidate.educationLevel];
+    const minRequiredRank = Math.min(...role.education.map((item) => EDUCATION_ORDER[item.level]));
+
+    if (candidateRank < minRequiredRank) {
+      const levelNames: Record<string, string> = {
+        lise: "lise",
+        onlisans: "ön lisans",
+        universite: "üniversite",
+        yukseklisans: "yüksek lisans",
+        doktora: "doktora"
+      };
+      blockers.push({
+        code: "education-level",
+        label: "Eğitim seviyesi",
+        detail: `İlan en az ${levelNames[role.education[0].level] ?? role.education[0].level} düzeyi istiyor; profilinde ${levelNames[candidate.educationLevel] ?? candidate.educationLevel} görünüyor.`
+      });
+    }
   }
 
   // 2. Minimum deneyim — ilan açıkça tecrübesiz kabul ediyorsa uygulanmaz.

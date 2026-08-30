@@ -133,24 +133,38 @@ async function main() {
 
   let totalResults = 0;
   let withEligibility = 0;
-  let eligibleCount = 0;
+  let rejectedListed = 0;
+  let rejectedWithoutReason = 0;
+  let orderViolations = 0;
   let top10Eligible = 0;
   let top10Total = 0;
 
   for (const row of searches) {
     const results = (typeof row.results === "string" ? JSON.parse(row.results) : row.results) as Array<{
-      eligibility?: { eligible: boolean };
+      eligibility?: { eligible: boolean; blockers?: unknown[] };
       matchScore: number;
     }>;
 
     totalResults += results.length;
+    let seenRejected = false;
 
     results.forEach((result, index) => {
       if (result.eligibility) {
         withEligibility += 1;
-        if (result.eligibility.eligible) {
-          eligibleCount += 1;
+
+        if (!result.eligibility.eligible) {
+          rejectedListed += 1;
+          seenRejected = true;
+
+          // Feature #3 sözleşmesi: elenen ilan ancak GEREKÇESİYLE listelenir.
+          if (!Array.isArray(result.eligibility.blockers) || result.eligibility.blockers.length === 0) {
+            rejectedWithoutReason += 1;
+          }
+        } else if (seenRejected) {
+          // Uygun ilan, elenmiş bir ilanın ALTINA düşmüş: eligible-first ihlali.
+          orderViolations += 1;
         }
+
         if (index < 10) {
           top10Total += 1;
           if (result.eligibility.eligible) {
@@ -162,7 +176,6 @@ async function main() {
   }
 
   if (totalResults) {
-    const eligibleRate = withEligibility ? (eligibleCount / withEligibility) * 100 : 0;
     const top10Rate = top10Total ? (top10Eligible / top10Total) * 100 : 0;
 
     report(
@@ -172,12 +185,14 @@ async function main() {
       withEligibility === totalResults,
       withEligibility > 0
     );
+    // Feature #3 ile sözleşme değişti: elenen ilanlar artık BİLEREK listede
+    // (gerekçeleriyle, başvuru kapısı ayrı). Ölçülen şey artık "listede elenen
+    // yok" değil; "elenen varsa gerekçesi var ve uygunların altında" olmalı.
     report(
-      "Listelenen ilanların hard filter'ı geçme oranı",
-      `${eligibleCount}/${withEligibility} (%${eligibleRate.toFixed(0)})`,
-      "%100 (uygun olmayan listelenmez)",
-      eligibleRate === 100,
-      eligibleRate >= 90
+      "Elenen ilanlar gerekçeli ve uygunların altında",
+      `${rejectedListed} elenen listelendi; ${rejectedWithoutReason} gerekçesiz, ${orderViolations} sıra ihlali`,
+      "gerekçesiz 0, sıra ihlali 0",
+      rejectedWithoutReason === 0 && orderViolations === 0
     );
     report(
       "İlk 10 sonucun kalitesi",

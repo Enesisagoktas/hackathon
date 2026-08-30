@@ -46,9 +46,28 @@ async function run() {
 
     console.log("[migrate] Ensuring application_settings columns...");
     await ensureColumn(pool, "application_settings", "min_match_score", "INT UNSIGNED NOT NULL DEFAULT 0");
+    // Feature #10 — eşleşme özeti e-postası tercihi (varsayılan KAPALI: opt-in).
+    await ensureColumn(pool, "application_settings", "match_email_enabled", "TINYINT(1) NOT NULL DEFAULT 0");
 
     console.log("[migrate] Ensuring job_listings columns...");
     await ensureJobListingsColumns(pool);
+
+    // Feature #10 — hangi ilanın hangi kullanıcıya bildirildiğinin kaydı.
+    // canonical_key = dedupe parmak izi: aynı ilan farklı kaynaktan tekrar
+    // gelse bile ikinci kez bildirilmez. Geri alma: DROP TABLE notified_matches.
+    console.log("[migrate] Ensuring notified_matches table...");
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS notified_matches (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        user_id BIGINT UNSIGNED NOT NULL,
+        canonical_key VARCHAR(190) NOT NULL,
+        listing_id BIGINT UNSIGNED NULL,
+        notified_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_notified_user_key (user_id, canonical_key),
+        KEY idx_notified_user_time (user_id, notified_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_turkish_ci`
+    );
 
     warnAboutAppSecret();
 

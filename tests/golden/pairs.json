@@ -1,0 +1,597 @@
+{
+  "_comment": "Altın Küme (Feature #6). Elle etiketli CV-ilan çiftleri; eligibility/normalizasyon/sıralama değişiklikleri bu kümeye karşı regresyon testinden geçmek zorunda. İlan metinleri cache'teki GERÇEK ilan kalıplarından türetildi. scoreBand deterministik motoru ölçer (AI karışmaz): high=toplam>=70 beklenir, medium=50-85 bandı kabul, low=<60 beklenir — bantlar tolerans içindir, nokta değer beklenmez.",
+  "cvs": {
+    "yazilimci_ogrenci": {
+      "targetRole": "Backend Developer",
+      "titles": [
+        "Java Developer",
+        "Backend Developer"
+      ],
+      "skills": [
+        "Java",
+        "Spring Boot",
+        "SQL",
+        "Git"
+      ],
+      "languages": [
+        "İngilizce"
+      ],
+      "industries": [
+        "Yazılım"
+      ],
+      "experienceAreas": [
+        "Backend"
+      ],
+      "keywords": [
+        "java",
+        "spring",
+        "backend"
+      ],
+      "locations": [
+        "Ankara"
+      ],
+      "locationMode": "cities",
+      "workMode": "any",
+      "seniority": "stajyer",
+      "yearsOfExperience": 0,
+      "educationLevel": "Üniversite (Öğrenci)",
+      "desiredSeniority": "stajyer"
+    },
+    "yazilimci_kidemli": {
+      "targetRole": "Backend Developer",
+      "titles": [
+        "Backend Developer",
+        "Yazılım Mühendisi"
+      ],
+      "skills": [
+        "Java",
+        "Spring Boot",
+        "PostgreSQL",
+        "Docker",
+        "REST"
+      ],
+      "languages": [
+        "İngilizce"
+      ],
+      "industries": [
+        "Yazılım"
+      ],
+      "experienceAreas": [
+        "Backend",
+        "Mikroservis"
+      ],
+      "keywords": [
+        "java",
+        "spring",
+        "backend",
+        "api"
+      ],
+      "locations": [],
+      "locationMode": "all-turkey",
+      "workMode": "any",
+      "seniority": "senior",
+      "yearsOfExperience": 6,
+      "educationLevel": "Üniversite (Mezun)",
+      "desiredSeniority": "any"
+    },
+    "hemsire_deneyimli": {
+      "targetRole": "Hemşire",
+      "titles": [
+        "Hemşire",
+        "Servis Hemşiresi"
+      ],
+      "skills": [
+        "Hasta bakımı",
+        "Yoğun bakım",
+        "İlaç uygulama",
+        "Enfeksiyon kontrolü"
+      ],
+      "languages": [],
+      "industries": [
+        "Sağlık"
+      ],
+      "experienceAreas": [
+        "Klinik hemşirelik"
+      ],
+      "keywords": [
+        "hemşire",
+        "hasta",
+        "yoğun bakım"
+      ],
+      "locations": [],
+      "locationMode": "all-turkey",
+      "workMode": "any",
+      "seniority": "orta",
+      "yearsOfExperience": 4,
+      "educationLevel": "Üniversite (Mezun)",
+      "desiredSeniority": "any"
+    },
+    "muhasebeci": {
+      "targetRole": "Muhasebe Elemanı",
+      "titles": [
+        "Muhasebeci",
+        "Ön Muhasebe Elemanı"
+      ],
+      "skills": [
+        "Genel muhasebe",
+        "Logo",
+        "E-fatura",
+        "Excel",
+        "Beyanname"
+      ],
+      "languages": [],
+      "industries": [
+        "Finans"
+      ],
+      "experienceAreas": [
+        "Muhasebe"
+      ],
+      "keywords": [
+        "muhasebe",
+        "fatura",
+        "logo"
+      ],
+      "locations": [
+        "İstanbul"
+      ],
+      "locationMode": "cities",
+      "workMode": "onsite",
+      "seniority": "orta",
+      "yearsOfExperience": 5,
+      "educationLevel": "Ön Lisans (Mezun)",
+      "desiredSeniority": "any"
+    },
+    "ogretmen_yeni_mezun": {
+      "targetRole": "İngilizce Öğretmeni",
+      "titles": [
+        "İngilizce Öğretmeni",
+        "Öğretmen"
+      ],
+      "skills": [
+        "İngilizce",
+        "Ders planlama",
+        "Sınıf yönetimi"
+      ],
+      "languages": [
+        "İngilizce"
+      ],
+      "industries": [
+        "Eğitim"
+      ],
+      "experienceAreas": [
+        "Özel ders"
+      ],
+      "keywords": [
+        "öğretmen",
+        "ingilizce",
+        "eğitim"
+      ],
+      "locations": [
+        "İzmir"
+      ],
+      "locationMode": "cities",
+      "workMode": "any",
+      "seniority": "junior",
+      "yearsOfExperience": 0,
+      "educationLevel": "Üniversite (Mezun)",
+      "desiredSeniority": "any"
+    },
+    "garson": {
+      "targetRole": "Garson",
+      "titles": [
+        "Garson",
+        "Servis Elemanı"
+      ],
+      "skills": [
+        "Servis",
+        "Müşteri ilişkileri",
+        "Sipariş alma",
+        "Adisyon"
+      ],
+      "languages": [],
+      "industries": [
+        "Yiyecek İçecek"
+      ],
+      "experienceAreas": [
+        "Restoran servisi"
+      ],
+      "keywords": [
+        "garson",
+        "servis",
+        "restoran"
+      ],
+      "locations": [
+        "İstanbul"
+      ],
+      "locationMode": "cities",
+      "workMode": "onsite",
+      "seniority": "orta",
+      "yearsOfExperience": 3,
+      "educationLevel": "Lise (Mezun)",
+      "desiredSeniority": "any"
+    }
+  },
+  "jobs": {
+    "backend_junior_ankara": {
+      "title": "Junior Backend Developer",
+      "description": "Ankara ofisimizde Java ve Spring Boot ile geliştirme yapacak junior takım arkadaşı arıyoruz. SQL bilgisi gereklidir.",
+      "requirements": [
+        "Java ve Spring Boot bilgisi gereklidir.",
+        "SQL sorguları yazabilmek zorunludur.",
+        "Git bilmesi tercih sebebidir."
+      ],
+      "candidateCriteria": [
+        "Tecrübe Tecrübesiz",
+        "Eğitim Seviyesi Üniversite(Öğrenci), Üniversite(Mezun)"
+      ],
+      "location": "Ankara"
+    },
+    "backend_senior_istanbul": {
+      "title": "Kıdemli Backend Developer",
+      "description": "İstanbul'da Java, Spring Boot ve mikroservis mimarisi ile çalışacak kıdemli geliştirici. PostgreSQL ve Docker deneyimi zorunludur.",
+      "requirements": [
+        "Java ve Spring Boot ile en az 5 yıl deneyim zorunludur.",
+        "PostgreSQL ve Docker deneyimi gereklidir.",
+        "Kubernetes bilgisi tercih sebebidir."
+      ],
+      "candidateCriteria": [
+        "Tecrübe En az 5 yıl tecrübeli",
+        "Eğitim Seviyesi Üniversite(Mezun)"
+      ],
+      "location": "İstanbul"
+    },
+    "data_scientist_senior": {
+      "title": "Senior Data Scientist",
+      "description": "Machine learning modelleri geliştirecek kıdemli veri bilimci. Python, TensorFlow ve istatistik uzmanlığı zorunludur.",
+      "requirements": [
+        "Python ve TensorFlow ile en az 4 yıl deneyim zorunludur.",
+        "İstatistiksel modelleme uzmanlığı gereklidir."
+      ],
+      "candidateCriteria": [
+        "Tecrübe En az 4 yıl tecrübeli",
+        "Eğitim Seviyesi Yüksek Lisans(Mezun), Doktora(Mezun)"
+      ],
+      "location": "İstanbul"
+    },
+    "hemsire_yogun_bakim": {
+      "title": "Yoğun Bakım Hemşiresi",
+      "description": "Hastanemizin yoğun bakım ünitesinde görevlendirilecek deneyimli hemşire aranmaktadır. Hasta bakımı ve ilaç uygulama deneyimi şarttır.",
+      "requirements": [
+        "Yoğun bakım deneyimi gereklidir.",
+        "Hemşirelik lisans diploması zorunludur."
+      ],
+      "candidateCriteria": [
+        "Tecrübe En az 2 yıl tecrübeli",
+        "Eğitim Seviyesi Üniversite(Mezun)"
+      ],
+      "location": "İstanbul"
+    },
+    "hemsire_stockholm": {
+      "title": "Nurse - ICU",
+      "description": "ICU nurse for our Stockholm hospital. Patient care and medication experience required. On-site position.",
+      "requirements": [
+        "ICU experience required.",
+        "Nursing degree mandatory."
+      ],
+      "candidateCriteria": [],
+      "location": "Stockholm"
+    },
+    "muhasebe_istanbul": {
+      "title": "Muhasebe Elemanı",
+      "description": "İstanbul Şişli'deki ofisimizde genel muhasebe süreçlerini yürütecek muhasebe elemanı. Logo ve e-fatura deneyimi gereklidir.",
+      "requirements": [
+        "Logo programı deneyimi gereklidir.",
+        "E-fatura ve beyanname süreçlerine hakim olmak zorunludur.",
+        "Excel bilgisi şarttır."
+      ],
+      "candidateCriteria": [
+        "Tecrübe En az 3 yıl tecrübeli",
+        "Eğitim Seviyesi Ön Lisans(Mezun), Üniversite(Mezun)"
+      ],
+      "location": "İstanbul"
+    },
+    "muhasebe_mudur_ankara": {
+      "title": "Muhasebe Müdürü",
+      "description": "Ankara'daki fabrikamızda muhasebe departmanını yönetecek müdür. SMMM belgesi ve yöneticilik deneyimi zorunludur.",
+      "requirements": [
+        "SMMM belgesi zorunludur.",
+        "En az 10 yıl muhasebe deneyimi ve 3 yıl yöneticilik zorunludur."
+      ],
+      "candidateCriteria": [
+        "Tecrübe En az 10 yıl tecrübeli",
+        "Eğitim Seviyesi Üniversite(Mezun)"
+      ],
+      "location": "Ankara"
+    },
+    "ingilizce_ogretmeni_izmir": {
+      "title": "İngilizce Öğretmeni",
+      "description": "İzmir'deki kolejimizde görev alacak İngilizce öğretmeni. Ders planlama ve sınıf yönetimi becerisi beklenir. Yeni mezunlar değerlendirilir.",
+      "requirements": [
+        "İngilizce öğretmenliği veya ilgili bölüm mezunu olmak gereklidir.",
+        "Ders planlama becerisi beklenir."
+      ],
+      "candidateCriteria": [
+        "Tecrübe Tecrübeli / Tecrübesiz",
+        "Eğitim Seviyesi Üniversite(Mezun)"
+      ],
+      "location": "İzmir"
+    },
+    "garson_istanbul": {
+      "title": "Garson",
+      "description": "İstanbul Kadıköy'deki restoranımızda servis yapacak deneyimli garson. Sipariş alma ve adisyon takibi işin parçasıdır.",
+      "requirements": [
+        "Servis deneyimi gereklidir.",
+        "Müşteri ilişkilerinde başarılı olmak beklenir."
+      ],
+      "candidateCriteria": [
+        "Tecrübe En az 1 yıl tecrübeli",
+        "Eğitim Seviyesi Lise(Mezun)"
+      ],
+      "location": "İstanbul"
+    },
+    "servis_elemani_istanbul": {
+      "title": "Servis Elemanı",
+      "description": "Kafemizde servis elemanı olarak çalışacak, sipariş alma ve servis deneyimi olan takım arkadaşı arıyoruz.",
+      "requirements": [
+        "Servis deneyimi tercih sebebidir."
+      ],
+      "candidateCriteria": [
+        "Tecrübe Tecrübeli / Tecrübesiz",
+        "Eğitim Seviyesi Lise(Mezun)"
+      ],
+      "location": "İstanbul"
+    },
+    "garson_antalya": {
+      "title": "Garson",
+      "description": "Antalya'daki otelimizin restoranında sezonluk garson. Servis ve sipariş deneyimi aranır.",
+      "requirements": [
+        "Servis deneyimi gereklidir."
+      ],
+      "candidateCriteria": [
+        "Tecrübe En az 1 yıl tecrübeli"
+      ],
+      "location": "Antalya"
+    },
+    "asci_istanbul": {
+      "title": "Aşçı",
+      "description": "Restoranımızın mutfağında sıcak bölümden sorumlu aşçı. Menü hazırlama ve mutfak hijyeni deneyimi zorunludur.",
+      "requirements": [
+        "Aşçılık deneyimi en az 3 yıl zorunludur.",
+        "Hijyen belgesi gereklidir."
+      ],
+      "candidateCriteria": [
+        "Tecrübe En az 3 yıl tecrübeli"
+      ],
+      "location": "İstanbul"
+    }
+  },
+  "pairs": [
+    {
+      "cv": "yazilimci_ogrenci",
+      "job": "backend_junior_ankara",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "high"
+      },
+      "why": "öğrenci kabul eden junior ilan + şehir ve beceri uyumu"
+    },
+    {
+      "cv": "yazilimci_ogrenci",
+      "job": "backend_senior_istanbul",
+      "expected": {
+        "eligible": false,
+        "reasons": [
+          "experience-below-min",
+          "graduate-required"
+        ]
+      },
+      "why": "teknik benzerlik yüksek ama mezuniyet+5 yıl şartı — sistemin engellemesi gereken ana hata"
+    },
+    {
+      "cv": "yazilimci_ogrenci",
+      "job": "data_scientist_senior",
+      "expected": {
+        "eligible": false
+      },
+      "why": "meslek+kıdem+eğitim uyuşmazlığı"
+    },
+    {
+      "cv": "yazilimci_ogrenci",
+      "job": "hemsire_yogun_bakim",
+      "expected": {
+        "eligible": false
+      },
+      "why": "tamamen farklı meslek; deneyim şartına takılır"
+    },
+    {
+      "cv": "yazilimci_kidemli",
+      "job": "backend_senior_istanbul",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "high"
+      },
+      "why": "kıdemli adaya kıdemli ilan, beceriler birebir"
+    },
+    {
+      "cv": "yazilimci_kidemli",
+      "job": "backend_junior_ankara",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "medium"
+      },
+      "why": "başvurabilir ama kıdem bir kademe farklı"
+    },
+    {
+      "cv": "yazilimci_kidemli",
+      "job": "data_scientist_senior",
+      "expected": {
+        "eligible": false
+      },
+      "why": "yüksek lisans şartı + meslek farkı"
+    },
+    {
+      "cv": "yazilimci_kidemli",
+      "job": "garson_istanbul",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "low"
+      },
+      "why": "hard blocker yok (lise+1 yıl herkes karşılar) ama teknik uyum sıfıra yakın — düşük bant"
+    },
+    {
+      "cv": "hemsire_deneyimli",
+      "job": "hemsire_yogun_bakim",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "high"
+      },
+      "why": "deneyim, eğitim ve beceriler tam uyum"
+    },
+    {
+      "cv": "hemsire_deneyimli",
+      "job": "hemsire_stockholm",
+      "expected": {
+        "eligible": false,
+        "reasons": [
+          "abroad-listing"
+        ]
+      },
+      "why": "yurt dışı ofis ilanı, uzaktan değil"
+    },
+    {
+      "cv": "hemsire_deneyimli",
+      "job": "backend_junior_ankara",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "low"
+      },
+      "why": "öğrenci kabul eden ilan hard filter koymuyor; teknik uyum çok düşük"
+    },
+    {
+      "cv": "hemsire_deneyimli",
+      "job": "muhasebe_istanbul",
+      "expected": {
+        "eligible": false
+      },
+      "why": "3 yıl MUHASEBE deneyimi şartı motoru deneyim üzerinden değil meslek üzerinden ayrıştıramaz ama eğitim/branş kriterine takılmaz — deneyim şartını hemşirelik yılı karşılıyor gibi görünse de beceri uyumu sıfır; bant düşük beklenir",
+      "expectedOverride": {
+        "eligible": true,
+        "scoreBand": "low"
+      }
+    },
+    {
+      "cv": "muhasebeci",
+      "job": "muhasebe_istanbul",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "high"
+      },
+      "why": "beceriler (Logo, e-fatura) ve şehir birebir"
+    },
+    {
+      "cv": "muhasebeci",
+      "job": "muhasebe_mudur_ankara",
+      "expected": {
+        "eligible": false,
+        "reasons": [
+          "experience-below-min"
+        ]
+      },
+      "why": "10 yıl şartı + şehir farkı"
+    },
+    {
+      "cv": "muhasebeci",
+      "job": "backend_senior_istanbul",
+      "expected": {
+        "eligible": false,
+        "reasons": [
+          "education-level"
+        ]
+      },
+      "why": "ön lisans mezunu aday, üniversite-mezunu şartlı ilana başvuramaz (education-level blocker — motor eklenince etiket güncellendi)"
+    },
+    {
+      "cv": "ogretmen_yeni_mezun",
+      "job": "ingilizce_ogretmeni_izmir",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "high"
+      },
+      "why": "tecrübesiz kabul + mezun + şehir uyumu"
+    },
+    {
+      "cv": "ogretmen_yeni_mezun",
+      "job": "muhasebe_istanbul",
+      "expected": {
+        "eligible": false,
+        "reasons": [
+          "experience-below-min"
+        ]
+      },
+      "why": "3 yıl deneyim şartı, adayda 0"
+    },
+    {
+      "cv": "ogretmen_yeni_mezun",
+      "job": "garson_antalya",
+      "expected": {
+        "eligible": false
+      },
+      "why": "1 yıl deneyim şartı + şehir farkı (İzmir seçili)"
+    },
+    {
+      "cv": "garson",
+      "job": "garson_istanbul",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "high"
+      },
+      "why": "meslek, deneyim, şehir tam uyum"
+    },
+    {
+      "cv": "garson",
+      "job": "servis_elemani_istanbul",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "high"
+      },
+      "why": "meslek sözlüğü: servis elemanı = garson"
+    },
+    {
+      "cv": "garson",
+      "job": "garson_antalya",
+      "expected": {
+        "eligible": false,
+        "reasons": [
+          "location-mismatch"
+        ]
+      },
+      "why": "İstanbul seçili, ilan Antalya, uzaktan değil"
+    },
+    {
+      "cv": "garson",
+      "job": "asci_istanbul",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "low"
+      },
+      "why": "komşu meslek; 3 yıl servis deneyimi aşçılık şartını yıl olarak karşılar, beceri uyumu düşük"
+    },
+    {
+      "cv": "garson",
+      "job": "backend_senior_istanbul",
+      "expected": {
+        "eligible": false
+      },
+      "why": "5 yıl + üniversite şartı"
+    },
+    {
+      "cv": "hemsire_deneyimli",
+      "job": "asci_istanbul",
+      "expected": {
+        "eligible": true,
+        "scoreBand": "low"
+      },
+      "why": "yıl şartı karşılanır, meslek uyumu yok — düşük bant, asla yüksek çıkmamalı"
+    }
+  ]
+}

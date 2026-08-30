@@ -42,6 +42,7 @@ export async function PUT(request: Request) {
       autoApplyEnabled: toBoolean(body.autoApplyEnabled),
       autoApplyMinScore: toNumber(body.autoApplyMinScore),
       minMatchScore: toNumber(body.minMatchScore),
+      matchEmailEnabled: toBoolean(body.matchEmailEnabled),
       dailySendLimit: toNumber(body.dailySendLimit),
       minPrepareScore: toNumber(body.minPrepareScore),
       senderName: toStringOrUndefined(body.senderName),

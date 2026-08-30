@@ -14,6 +14,7 @@ import {
 } from "@/lib/jobs/progress";
 import { extractProfileFromCv, type AiExtractedProfile } from "@/lib/extract-keywords";
 import { ensureJobQueueSchema, parseJsonField, type JobSearchQueueRow, type QueuedFileType } from "@/lib/job-queue";
+import { computeSearchFingerprint, searchCacheTtlHours } from "@/lib/jobs/search-fingerprint";
 import { searchJobListings } from "@/lib/job-search";
 import { normalizeCities, normalizeLocationMode, normalizeWorkMode } from "@/lib/search-preferences";
 import type { JobSearchResult } from "@/lib/jobs/types";
@@ -239,6 +240,25 @@ async function processClaimedJob(job: JobSearchQueueRow) {
   const seniorityFilter = typeof job.seniority_filter === "string" ? job.seniority_filter : "any";
   const searchNote = typeof job.search_note === "string" && job.search_note.trim() ? job.search_note.trim() : undefined;
 
+  // Feature #8 — parmak izi önbelleği: aynı kullanıcı + aynı CV + aynı
+  // kriterlerle kısa süre önce tamamlanmış bir arama varsa boru hattını
+  // yeniden koşturmadan onun sonuçları kullanılır.
+  const fingerprint = computeSearchFingerprint({
+    userId: job.user_id != null ? Number(job.user_id) : null,
+    cvId: job.cv_id != null ? Number(job.cv_id) : null,
+    selectedPositions,
+    seniorityFilter,
+    locationMode,
+    cities,
+    workMode,
+    searchNote: searchNote ?? null
+  });
+
+  if (await tryReuseFingerprintedSearch(job, fingerprint)) {
+    console.log(`[Worker] Job ${job.id} - Aynı parmak izli taze arama bulundu; sonuçlar önbellekten kopyalandı.`);
+    return;
+  }
+
   console.log(
     `[Worker] Job ${job.id} - Arama başlıyor. Pozisyonlar: ${selectedPositions.join(", ")}` +
       (seniorityFilter !== "any" ? ` | seviye: ${seniorityFilter}` : "") +
@@ -339,6 +359,7 @@ async function processClaimedJob(job: JobSearchQueueRow) {
          summary = ?,
          results = ?,
          apply_summary = ?,
+         fingerprint = ?,
          cv_text = NULL,
          locked_at = NULL,
          error_message = NULL,
@@ -349,6 +370,7 @@ async function processClaimedJob(job: JobSearchQueueRow) {
       JSON.stringify(summary),
       JSON.stringify(finalResults),
       applySummary ? JSON.stringify(applySummary) : null,
+      fingerprint,
       job.id
     ]
   );
@@ -500,6 +522,121 @@ async function markJobFailed(jobId: number, error: unknown) {
      WHERE id = ? AND status = 'processing'`,
     [message.slice(0, 2000), jobId]
   );
+}
+
+/**
+ * Feature #8 — Aynı parmak izli, TTL içindeki tamamlanmış aramayı arar ve
+ * bulursa sonuçlarını bu işe kopyalayıp işi 'completed' yapar.
+ *
+ * Sınırlar:
+ *   - Parmak izi userId + cvId içerir; yine de sorguya null-güvenli user_id
+ *     eşitliği eklenir (savunma katmanı — kişiselleştirilmiş skorlar asla
+ *     başka kullanıcıya taşınamaz).
+ *   - Boş sonuçlu arama yeniden KULLANILMAZ: boş sonucu 6 saat tekrarlamak
+ *     yerine taze tarama şansı vermek daha doğru.
+ *   - Kopyalanan satıra fingerprint YAZILMAZ; sonraki aramalar hep gerçek
+ *     taramanın satırını bulur. Böylece cache zinciri oluşmaz ve TTL,
+ *     kaynakların gerçekten tarandığı ana bağlı kalır.
+ */
+async function tryReuseFingerprintedSearch(job: JobSearchQueueRow, fingerprint: string): Promise<boolean> {
+  const ttlHours = searchCacheTtlHours();
+
+  if (ttlHours <= 0) {
+    return false;
+  }
+
+  const pool = getDbPool();
+
+  try {
+    const [rows] = await pool.query<mysql.RowDataPacket[]>(
+      `SELECT id, results, summary, apply_summary, completed_at
+       FROM job_searches
+       WHERE fingerprint = ?
+         AND id != ?
+         AND status = 'completed'
+         AND user_id <=> ?
+         AND results IS NOT NULL
+         AND completed_at > DATE_SUB(NOW(), INTERVAL ? MINUTE)
+       ORDER BY completed_at DESC
+       LIMIT 1`,
+      [fingerprint, job.id, job.user_id ?? null, Math.round(ttlHours * 60)]
+    );
+
+    const prior = rows[0];
+
+    if (!prior) {
+      return false;
+    }
+
+    const results = parseJsonField<JobSearchResult[]>(prior.results, []);
+
+    if (!results.length) {
+      return false;
+    }
+
+    const priorSummary = parseJsonField<Record<string, unknown>>(prior.summary, {});
+    const scannedAt = prior.completed_at instanceof Date ? prior.completed_at : new Date(String(prior.completed_at));
+    const timeLabel = Number.isNaN(scannedAt.getTime())
+      ? null
+      : scannedAt.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Istanbul" });
+
+    const summary = {
+      ...priorSummary,
+      sourceNote: [
+        typeof priorSummary.sourceNote === "string" ? priorSummary.sourceNote : "",
+        timeLabel
+          ? `Sonuçlar ${timeLabel}'de tarandı; aynı kriterli arama tekrarlandığı için önbellekten getirildi.`
+          : "Aynı kriterli yakın tarihli aramanın sonuçları önbellekten getirildi."
+      ]
+        .filter(Boolean)
+        .join(" ")
+    };
+
+    // Arayüz aşama panelini boş bırakmamak için tüm aşamalar kapatılır.
+    const now = new Date().toISOString();
+    const base = createProgress(now);
+    const eligibleCount = results.filter((result) => result.eligibility?.eligible !== false).length;
+    const progress = {
+      stages: base.stages.map((stage) => ({
+        ...stage,
+        status: "done" as StageStatus,
+        detail: stage.key === "plan" ? "Aynı kriterli yakın aramanın sonuçları önbellekten yüklendi" : stage.detail
+      })),
+      counters: { found: results.length, verified: results.length, eliminated: 0, eligible: eligibleCount },
+      updatedAt: now
+    };
+
+    const [updateResult] = await pool.query<mysql.ResultSetHeader>(
+      `UPDATE job_searches
+       SET status = 'completed',
+           progress = 100,
+           progress_stages = ?,
+           completed_at = NOW(),
+           result_count = ?,
+           summary = ?,
+           results = ?,
+           apply_summary = ?,
+           cv_text = NULL,
+           locked_at = NULL,
+           error_message = NULL,
+           updated_at = NOW()
+       WHERE id = ? AND status = 'processing'`,
+      [
+        JSON.stringify(progress),
+        results.length,
+        JSON.stringify(summary),
+        JSON.stringify(results),
+        prior.apply_summary != null ? JSON.stringify(parseJsonField<unknown>(prior.apply_summary, null)) : null,
+        job.id
+      ]
+    );
+
+    return updateResult.affectedRows > 0;
+  } catch (error) {
+    // Önbellek bir kolaylıktır: hata verirse normal arama yoluna düşülür.
+    console.warn(`[Worker] Job ${job.id} - Parmak izi önbelleği okunamadı:`, error instanceof Error ? error.message : error);
+    return false;
+  }
 }
 
 /**

@@ -92,6 +92,58 @@ export async function sendApplicationEmail(
   return { messageId: String(info.messageId ?? ""), accepted };
 }
 
+export type SendDigestEmailInput = {
+  settings: ApplicationSettings;
+  /** Alıcı — HER ZAMAN kullanıcının kendi kayıtlı adresi (dışarıya gitmez). */
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+};
+
+/**
+ * Feature #10 — Yeni eşleşme özeti e-postası.
+ *
+ * Başvuru e-postasından farkları: ek zorunlu değildir, alıcı işveren değil
+ * kullanıcının KENDİSİDİR ve CC uygulanmaz. Taşıma katmanı (kullanıcının kendi
+ * SMTP'si), prova modu (SMTP_DRY_RUN) ve hata çevirisi aynen ortaktır.
+ */
+export async function sendDigestEmail(input: SendDigestEmailInput): Promise<void> {
+  const { settings, to } = input;
+
+  const transporter = await createTransporter(settings);
+  const fromAddress = settings.senderEmail;
+
+  if (!fromAddress) {
+    throw new Error("Gönderen e-posta adresi tanımlı değil.");
+  }
+
+  let info: any;
+  try {
+    info = await transporter.sendMail({
+      from: { name: settings.senderName || "CVMatch", address: fromAddress },
+      to,
+      subject: input.subject,
+      text: input.text,
+      html: input.html
+    });
+  } catch (error) {
+    throw new Error(describeSmtpError(error, settings));
+  }
+
+  if (isDryRun()) {
+    console.log(`[mailer] PROVA: özet e-postası "${input.subject}" → ${to}. Gerçekte gönderilmedi.`);
+    return;
+  }
+
+  const accepted = toAddressList(info.accepted);
+  const rejected = toAddressList(info.rejected);
+
+  if (rejected.length > 0 || accepted.length === 0) {
+    throw new Error(`Özet e-postası alıcı tarafından kabul edilmedi (${rejected[0] ?? to}).`);
+  }
+}
+
 /** nodemailer accepted/rejected alanlarını düz adres listesine çevirir. */
 function toAddressList(value: unknown): string[] {
   if (!Array.isArray(value)) {

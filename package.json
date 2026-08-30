@@ -15,6 +15,7 @@
     "make:cv": "tsx scripts/make-sample-cv.ts",
     "test:apply": "tsx scripts/test-apply-pipeline.ts",
     "test:e2e": "tsx scripts/test-e2e-http.ts",
+    "test:scenarios": "tsx scripts/test-scenarios.ts",
     "test:relevance": "tsx scripts/test-relevance.ts",
     "test:crawl": "tsx scripts/test-crawl-guards.ts",
     "test:search": "tsx scripts/test-search-guards.ts",
@@ -26,6 +27,9 @@
     "test:title": "tsx scripts/test-title-guard.ts",
     "test:dedupe": "tsx scripts/test-dedupe.ts",
     "test:profession": "tsx scripts/test-profession-dictionary.ts",
+    "test:freshness": "tsx scripts/test-freshness.ts",
+    "test:golden": "tsx scripts/test-golden.ts",
+    "test:fingerprint": "tsx scripts/test-fingerprint.ts",
     "test:health": "tsx scripts/test-source-health.ts",
     "test:registry": "tsx scripts/test-source-registry.ts",
     "health:sources": "tsx scripts/source-health.ts",
@@ -34,7 +38,9 @@
     "sources:list": "tsx scripts/list-sources.ts",
     "audit:eligibility": "tsx scripts/audit-eligibility.ts",
     "cleanup:listings": "tsx scripts/cleanup-listings.ts",
-    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search && npm run test:requirements && npm run test:eligibility && npm run test:progress && npm run test:title && npm run test:dedupe && npm run test:health && npm run test:registry && npm run test:profession"
+    "maintenance": "tsx scripts/maintenance.ts",
+    "notify:matches": "tsx scripts/notify-matches.ts",
+    "test:units": "npm run test:relevance && npm run test:crawl && npm run test:search && npm run test:requirements && npm run test:eligibility && npm run test:progress && npm run test:title && npm run test:dedupe && npm run test:health && npm run test:registry && npm run test:profession && npm run test:freshness && npm run test:golden && npm run test:fingerprint"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
