@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { requireSessionUser } from "@/lib/auth/session";
+import { requireSessionUser, UnauthorizedError } from "@/lib/auth/session";
 import mysql from "mysql2/promise";
 
 import { getDbPool } from "@/lib/db";
@@ -87,8 +87,12 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ heatmap, confident: heatmapHasConfidence(heatmap) });
   } catch (error) {
-    if (error instanceof Error && /oturum|session/i.test(error.message)) {
-      return NextResponse.json({ message: "Oturum gerekli." }, { status: 401 });
+    // Tip kontrolü, mesaj metni değil: UnauthorizedError'ın varsayılan mesajı
+    // ("Bu işlem için giriş yapmanız gerekiyor.") ne "oturum" ne "session"
+    // içerdiği için eski metin eşlemesi tutmuyor ve oturumsuz istek 401 yerine
+    // 500 dönüyordu — ısı haritası kartı da bunu "veri yok" sanıyordu.
+    if (error instanceof UnauthorizedError) {
+      return NextResponse.json({ message: error.message }, { status: 401 });
     }
     console.error("[skills-heatmap] üretilemedi:", error);
     return NextResponse.json({ message: "Isı haritası şu an üretilemedi." }, { status: 500 });
