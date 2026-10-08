@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 
+import { getSessionUser } from "@/lib/auth/session";
+import { clearStaleApplications, savePrimaryCv } from "@/lib/cv/store";
 import { extractDocxText } from "@/lib/extract-docx";
 import { extractPdfText } from "@/lib/extract-pdf";
-import { getDbPool } from "@/lib/db";
-import mysql from "mysql2/promise";
+import { enqueueJobSearch } from "@/lib/job-queue";
+import { ensureJobWorkerRunning } from "@/lib/job-worker";
+import { normalizeCities, normalizeLocationMode, normalizeWorkMode } from "@/lib/search-preferences";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,22 +43,54 @@ export async function POST(request: Request) {
       return errorResponse("CV metni okunamadı veya dosyada yeterli metin bulunamadı.", 422);
     }
 
-    // Save the request into MySQL as a pending search job
-    const pool = getDbPool();
-    const [result] = await pool.query<mysql.ResultSetHeader>(
-      `INSERT INTO job_searches 
-       (status, progress, cv_text, started_at) 
-       VALUES ('pending', 0, ?, NOW())`,
-      [text]
-    );
+    const locationMode = normalizeLocationMode(readFormString(formData, "locationMode"));
+    const cities = normalizeCities(parseJsonArray(readFormString(formData, "cities")));
+    const workMode = normalizeWorkMode(readFormString(formData, "workMode"));
 
-    const readyAt = new Date();
-    readyAt.setMinutes(readyAt.getMinutes() + 10);
+    if (locationMode === "cities" && cities.length === 0) {
+      return errorResponse("İl seç modunda en az bir il seçin.", 400);
+    }
+
+    // Kimlik yalnızca imzalı oturum çerezinden okunur; istemciden gelen
+    // e-posta alanına güvenilmez.
+    const user = await getSessionUser();
+
+    if (!user) {
+      return errorResponse("CV yüklemek için giriş yapmanız gerekiyor.", 401);
+    }
+
+    // CV'yi ana CV olarak sakla: her ilana göre yeniden yazabilmek için
+    // ham metnin kalıcı olması gerekiyor.
+    const cvId = await savePrimaryCv({
+      userId: user.id,
+      rawText: text,
+      fileType,
+      fileName: file.name.slice(0, 255)
+    });
+
+    // Eski CV'den üretilmiş, henüz gönderilmemiş başvuru paketlerini temizle.
+    // Bunlar eski CV'ye göre yazıldığı için artık geçersiz; ekranda kalırlarsa
+    // kullanıcı yeni CV'nin sonuçlarıyla karıştırıyor.
+    const clearedApplications = await clearStaleApplications(user.id);
+
+    const { searchId } = await enqueueJobSearch({
+      cvText: text,
+      fileType,
+      userEmail: user.email,
+      userId: user.id,
+      cvId,
+      locationMode,
+      cities,
+      workMode
+    });
+
+    ensureJobWorkerRunning();
 
     return NextResponse.json({
-      searchId: result.insertId,
+      searchId,
+      cvId,
+      clearedApplications,
       status: "pending",
-      readyAt: readyAt.toISOString(),
       message: "İşlem kuyruğa alındı."
     });
   } catch (error) {
@@ -88,6 +123,25 @@ function isUploadFile(value: FormDataEntryValue | null): value is File {
     typeof value.arrayBuffer === "function"
   );
 }
+
+function readFormString(formData: FormData, key: string) {
+  const value = formData.get(key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseJsonArray(value: string | undefined) {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 
 function errorResponse(message: string, status: number) {
   return NextResponse.json({ message }, { status });

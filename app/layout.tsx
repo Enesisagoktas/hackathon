@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CVMatch | CV Odaklı Geniş İş Arama",
+  title: "CVMatch | CV Analizi ve Gerçek İş İlanı Eşleştirme",
   description:
-    "CV yükleyerek becerilerini analiz et; lokasyon, uzaktan çalışma ve Türkiye iş platformları için arama linkleri oluştur."
+    "PDF/DOCX CV'nizi yükleyin; AI profilinizi çıkarsın, veritabanındaki aktif gerçek iş ilanları arasından en uygunlarını skorlayıp doğrudan ilan detay linkleriyle göstersin."
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

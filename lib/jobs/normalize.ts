@@ -38,6 +38,33 @@ export function slugify(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
+/**
+ * Konum metnindeki tekrarlı parçaları atar.
+ *
+ * Bazı kaynaklar (ör. Secretcv çoklu lokasyon ilanları) konumu "İstanbul
+ * Anadolu, İstanbul Avrupa, İstanbul Anadolu, İstanbul Avrupa" gibi tekrarla
+ * yayınlıyor; kartta amatör görünüyor. Parçalar virgülle ayrılır, ilk görülen
+ * yazım korunur (sıra bozulmaz).
+ */
+export function dedupeLocationSegments(value: string): string {
+  const seen = new Set<string>();
+  const parts = value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const unique = parts.filter((part) => {
+    const key = part.toLocaleLowerCase("tr-TR");
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+
+  return unique.length ? unique.join(", ") : value.trim();
+}
+
 export function absoluteUrl(href: string, baseUrl: string) {
   try {
     return new URL(href, baseUrl).toString().split("#")[0];

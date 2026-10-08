@@ -1,17 +1,44 @@
 import type { LocationMode, WorkMode } from "@/lib/search-preferences";
 
-export type JobPlatform =
-  | "Kariyer.net"
-  | "Secretcv"
-  | "Eleman.net"
-  | "Yenibiriş"
-  | "Toptalent"
-  | "LinkedIn"
-  | "İŞKUR";
+/**
+ * Known platforms get autocomplete, but DB-sourced names (e.g. crawler or
+ * sample data) may introduce others, so any string is also accepted.
+ */
+/**
+ * Kaynak adı. Eskiden 8 platformluk kapalı bir birlikti; kaynak evreni
+ * Source Registry ile dinamik büyüdüğü için (§1-3) artık serbest metindir.
+ * Kayıtlı kaynakların tek doğru listesi source_registry tablosudur.
+ */
+export type JobPlatform = string;
 
 export type JobResultCategory = "recommended" | "general" | "tech" | "public";
 export type JobResultKind = "search" | "job";
 export type JobResultConfidence = "high" | "medium" | "low";
+
+/** Lifecycle status of a cached listing in job_listings. */
+export type JobListingStatus = "active" | "stale" | "expired" | "failed";
+
+/** A row from job_listings joined with its source, as used by the cache search. */
+export type JobListingRecord = {
+  id: number;
+  sourceId: number;
+  platform: JobPlatform;
+  category: JobResultCategory;
+  externalId?: string;
+  title: string;
+  company?: string;
+  location?: string;
+  workMode?: WorkMode;
+  description: string;
+  requirements: string[];
+  candidateCriteria: string[];
+  externalUrl: string;
+  sourceQuery?: string;
+  postedAt?: string;
+  status: JobListingStatus;
+  lastSeenAt?: string;
+  lastCheckedAt?: string;
+};
 
 /** Single requirement criterion for a job listing */
 export type CriteriaItem = {
@@ -42,6 +69,12 @@ export type SearchJobsInput = {
   fullText?: string;
   /** AI-extracted rich profile from CV evaluation */
   aiProfile?: AiCvProfile;
+  /** Kullanıcının analiz sonrası seçtiği hedef pozisyonlar; arama bunlara odaklanır. */
+  selectedPositions?: string[];
+  /** Aranan ilan seviyesi: any | stajyer | junior | mid | senior. */
+  seniorityFilter?: string;
+  /** Kullanıcının aramaya düştüğü kısa not; anahtar ifadeleri skorlama dikkate alır. */
+  searchNote?: string;
 };
 
 /** Rich profile extracted by AI from the full CV text */
@@ -87,6 +120,54 @@ export type JobSearchResult = {
   matchedKeywords?: string[];
   /** Detailed criteria match breakdown (AI-powered) */
   criteriaMatch?: CriteriaMatchResult;
+  /** job_listings.id — başvuru kaydını gerçek ilana bağlar. */
+  listingId?: number;
+  /** İlanın "aranan nitelikler" satırları; CV uyarlaması bunları kullanır. */
+  requirements?: string[];
+  /** İlanın "aday kriterleri" satırları. */
+  candidateCriteria?: string[];
+  /** §11 — Katmanlı uygunluk sonucu; eleme ve sıralama buna dayanır. */
+  eligibility?: EligibilitySummary;
+  /**
+   * §11 — Aynı ilanın görüldüğü kaynaklar (kanonik gösterim).
+   * Birden fazlaysa kart "N kaynakta bulundu" rozeti gösterir.
+   */
+  foundInSources?: string[];
+  /** Feature #2 — tazelik rozeti (new/recent/old); tarih bilinmiyorsa yok. */
+  freshness?: "new" | "recent" | "old";
+};
+
+/**
+ * Arayüze taşınan uygunluk özeti.
+ *
+ * `lib/jobs/eligibility.ts` içindeki tam sonucun sadeleştirilmiş hâlidir;
+ * kullanıcıya yalnızca yüzde değil, NEDEN uygun olduğu da gösterilir.
+ */
+export type EligibilitySummary = {
+  eligible: boolean;
+  /** Elenmişse zorunlu şart ihlalleri. */
+  blockers: { code: string; label: string; detail: string }[];
+  /** 0-60 */
+  roleScore: number;
+  /** 0-40 */
+  technicalScore: number;
+  band: "cok-guclu" | "cok-uygun" | "uygun" | "sinirda" | "uygun-degil";
+  bandLabel: string;
+  /** Pozisyon uygunluğu bileşenleri (deneyim, kıdem, eğitim, konum, dil). */
+  roleComponents: EligibilityComponent[];
+  /** Teknik uyum bileşenleri. */
+  technicalComponents: EligibilityComponent[];
+  /** İlandan kaç şart okunabildi. */
+  confidence: "high" | "medium" | "low";
+};
+
+export type EligibilityComponent = {
+  key: string;
+  label: string;
+  earned: number;
+  max: number;
+  status: "met" | "partial" | "unmet" | "unknown";
+  detail: string;
 };
 
 export type PlatformCrawlStatus = {
@@ -94,7 +175,15 @@ export type PlatformCrawlStatus = {
   status: "success" | "partial" | "empty" | "failed" | "timeout";
   searchedUrls: number;
   discoveredUrls: number;
+  /**
+   * Detay sayfasından BAŞARIYLA okunan ilan sayısı (ilgi filtresinden ÖNCE).
+   *
+   * Kaynak sağlığı bu sayıya bakar: bir kaynak düzgün çalışıp aramayla
+   * alakasız ilanlar döndürebilir; bu, kaynağın bozuk olduğu anlamına gelmez.
+   */
   parsedListings: number;
+  /** Profille ilgili bulunup kabul edilen ilan sayısı. */
+  relevantListings: number;
   message?: string;
 };
 
@@ -149,6 +238,10 @@ export type CandidateProfile = {
   preferredRoles?: string[];
   /** Profession category */
   professionCategory?: string;
+  /** Kullanıcının aradığı ilan seviyesi (any ise kısıt yok). */
+  desiredSeniority?: string;
+  /** Kullanıcının arama notu; skorlama ve uyarlama bu ifadelere ağırlık verir. */
+  searchNote?: string;
 };
 
 export type CrawledJobListing = {
@@ -165,6 +258,10 @@ export type CrawledJobListing = {
   url: string;
   sourceQuery: string;
   postedAt?: string;
+  /** Set when the listing came from the DB cache. */
+  listingId?: number;
+  /** Cheap (non-AI) prefilter score, used to normalize fallback results. */
+  cheapScore?: number;
 };
 
 export type JobAdapter = {
@@ -185,7 +282,16 @@ export type PlatformSelectors = {
   date?: string[];
 };
 
+/** §14 — Bir taramada hangi kaynak sınıflarının kontrol edildiği. */
+export type CoverageEntry = {
+  sourceType: string;
+  scanned: number;
+  succeeded: number;
+};
+
 export type CrawlJobsResult = {
   listings: CrawledJobListing[];
   statuses: PlatformCrawlStatus[];
+  /** Kaynak sınıfı kapsaması; dar kapsam aramayı "tamamlandı" saymamalı. */
+  coverage?: CoverageEntry[];
 };
