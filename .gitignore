@@ -14,5 +14,5 @@ pnpm-debug.log*
 /samples
 storage/
 
-# Yerel Claude Code araç yapılandırması (worktree dizinlerini de içerir)
+# Yerel araç yapılandırması
 .claude/
