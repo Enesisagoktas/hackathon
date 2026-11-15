@@ -27,7 +27,7 @@ import { spawn } from "child_process";
  *
  * Windows Görev Zamanlayıcı örneği (her gece 03:30):
  *   Program:   cmd.exe
- *   Argümanlar: /c "cd /d C:\App\hackathon && npm run maintenance >> logs\maintenance.log 2>&1"
+ *   Argümanlar: /c "cd /d C:\Projeler\hackathon && npm run maintenance >> logs\maintenance.log 2>&1"
  */
 
 type Step = {
